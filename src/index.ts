@@ -254,38 +254,59 @@ async function handleGetSupplyPipeline(postcode: string): Promise<any> {
 }
 
 /**
- * Get wealth migration: track equity flow from wealthy areas
+ * Get wealth migration: track equity flow and demand pressure
+ * Uses migration flow as proxy for demand, housing completions as supply
  */
 async function handleGetWealthMigration(region: string): Promise<any> {
   validateRegion(region);
   
+  // Fetch net migration flow (new people arriving = demand indicator)
   const migrationEndpoint = `${ABS_API_BASE}ABS,ABS_REGIONAL_MIGRATION/all?startPeriod=2022&endPeriod=2023`;
   const migrationData = await fetchABSData(migrationEndpoint);
   
-  const popEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-  const popData = await fetchABSData(popEndpoint);
+  // Fetch housing supply (building completions)
+  const supplyEndpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2022-01&endPeriod=2023-12`;
+  const supplyData = await fetchABSData(supplyEndpoint);
   
-  if (migrationData.error && popData.error) {
+  if (migrationData.error && supplyData.error) {
     return createErrorResponse(
       `Unable to retrieve wealth migration data for region "${region}".\n` +
-      `Issues: ${migrationData.error} / ${popData.error}\n` +
-      `Note: Configure ORIGIN_SA4/DEST_SA4 dimensions for Sydney→Regional wealth migration tracking.`
+      `Issue: ${migrationData.error || supplyData.error}\n` +
+      `Note: Wealth migration tracks population inflow vs housing supply tightness.`
     );
   }
   
-  const migrationFlow = extractValue(migrationData);
-  const population = extractValue(popData);
-  const equitySignal = migrationFlow && migrationFlow > 5000 ? 'WEALTH_INFLUX' : 'STABLE';
+  const migrationFlow = extractValue(migrationData) || 0;
+  const newHousing = extractValue(supplyData) || 1000;
+  
+  // Calculate demand-supply ratio: if migration exceeds housing supply, it's tight
+  const demandSupplyRatio = newHousing > 0 ? (migrationFlow / newHousing) : 1;
+  
+  let equitySignal = 'STABLE_MARKET';
+  let insight = '';
+  
+  if (migrationFlow > 3000 && demandSupplyRatio > 0.8) {
+    equitySignal = 'WEALTH_INFLUX_SHORTAGE';
+    insight = `💰 EQUITY STAMPEDE + SHORTAGE: ${Math.round(migrationFlow)} arrivals vs ${Math.round(newHousing)} homes - severe undersupply`;
+  } else if (migrationFlow > 3000) {
+    equitySignal = 'WEALTH_INFLUX_SUPPLIED';
+    insight = `💰 EQUITY FLOWING IN: ${Math.round(migrationFlow)} arrivals - supply keeping up`;
+  } else if (migrationFlow > 1000 && demandSupplyRatio > 1.0) {
+    equitySignal = 'MODERATE_WEALTH_TIGHT_SUPPLY';
+    insight = `📈 STEADY INFLOW + TIGHT SUPPLY: Arrivals exceed housing supply`;
+  } else {
+    equitySignal = 'STABLE_MARKET';
+    insight = `📊 STABLE MARKET: Organic growth without major migration pressure`;
+  }
   
   return createSuccessResponse({
     region,
     net_migration: migrationFlow,
-    population_base: population,
+    new_housing_supply: newHousing,
+    demand_supply_ratio: parseFloat(demandSupplyRatio.toFixed(2)),
     equity_flow_signal: equitySignal,
-    market_insight: migrationFlow && migrationFlow > 5000 ?
-      '💰 EQUITY FLOWING IN: Strong migration from wealthy metro areas detected' :
-      '📊 STABLE MARKET: Organic population growth without major equity influx',
-    note: "Using ABS_REGIONAL_MIGRATION. Configure ORIGIN_SA4/DEST_SA4 to track Sydney→Regional wealth migration."
+    market_insight: insight,
+    note: "Demand-supply ratio = migration / new housing. >1 = undersupply (price pressure), <0.3 = oversupply"
   });
 }
 
