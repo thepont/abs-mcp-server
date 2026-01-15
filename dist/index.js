@@ -14,60 +14,273 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-/*
- * abs-mcp-server
- * Copyright (C) 2026 Paul Esson
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
-// ABS Data API base URL (SDMX format: /rest/data/{dataflowIdentifier}/{dataKey})
-// See: https://data.api.abs.gov.au/
+// ============================================================================
+// CONFIGURATION & CONSTANTS
+// ============================================================================
 const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
-// Helper to fetch SDMX-JSON and handle errors
+const SDMX_JSON_HEADER = 'application/vnd.sdmx.data+json;version=1.0.0-wd';
+// ============================================================================
+// INPUT VALIDATION
+// ============================================================================
+class ValidationError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ValidationError';
+    }
+}
+/**
+ * Validates Australian postcode format (4 digits)
+ * @throws ValidationError if invalid
+ */
+function validatePostcode(postcode) {
+    if (!postcode || !/^\d{4}$/.test(postcode)) {
+        throw new ValidationError(`Invalid Australian postcode: "${postcode}". Postcode must be exactly 4 digits (e.g., "2000").`);
+    }
+}
+/**
+ * Validates region/area code format (non-empty string)
+ * @throws ValidationError if invalid
+ */
+function validateRegion(region) {
+    if (!region || region.trim().length === 0) {
+        throw new ValidationError(`Invalid region: empty or whitespace-only. Please provide a valid region name or postcode.`);
+    }
+}
+// ============================================================================
+// ABS API HELPERS
+// ============================================================================
+/**
+ * Fetches data from ABS SDMX API with proper error handling
+ */
 async function fetchABSData(endpoint) {
     try {
         const res = await fetch(endpoint, {
             headers: {
-                'Accept': 'application/vnd.sdmx.data+json;version=1.0.0-wd'
+                'Accept': SDMX_JSON_HEADER
             }
         });
         if (!res.ok) {
             const text = await res.text();
-            throw new Error(`ABS API error: ${res.status} - ${text}`);
+            return {
+                error: `ABS API returned ${res.status}: Failed to retrieve data. The requested dataflow or time period may not be available.`
+            };
         }
         const data = await res.json();
         return data;
     }
     catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
+        return {
+            error: `Failed to fetch ABS data: ${err instanceof Error ? err.message : String(err)}`
+        };
     }
 }
-// Helper to extract first available value from SDMX series
+/**
+ * Extracts the first available numeric value from SDMX response
+ */
 function extractValue(data) {
-    if (data.error || !data.data?.dataSets?.[0]?.series)
+    if (data.error || !data.data?.dataSets?.[0]?.series) {
         return null;
+    }
     const series = data.data.dataSets[0].series;
     const firstSeriesKey = Object.keys(series)[0];
-    if (!firstSeriesKey)
+    if (!firstSeriesKey) {
         return null;
+    }
     const observations = series[firstSeriesKey].observations;
     const firstObsKey = Object.keys(observations)[0];
     return observations[firstObsKey]?.[0] ?? null;
 }
+/**
+ * Returns a standardized error response to the LLM
+ */
+function createErrorResponse(error) {
+    return {
+        content: [
+            {
+                type: 'text',
+                text: error,
+            },
+        ],
+        isError: true,
+    };
+}
+/**
+ * Returns a standardized success response with JSON data
+ */
+function createSuccessResponse(data) {
+    return {
+        content: [
+            {
+                type: 'text',
+                text: JSON.stringify(data, null, 2),
+            },
+        ],
+    };
+}
+// ============================================================================
+// TOOL IMPLEMENTATIONS
+// ============================================================================
+/**
+ * Get suburb statistics: population and income for a postcode
+ */
+async function handleGetSuburbStats(postcode) {
+    validatePostcode(postcode);
+    const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+    const data = await fetchABSData(endpoint);
+    if (data.error) {
+        return createErrorResponse(`Unable to retrieve suburb statistics for postcode ${postcode}.\n` +
+            `Issue: ${data.error}\n` +
+            `Note: Accurate postcode-level data requires SDMX dimension configuration for the ABS_ANNUAL_ERP_ASGS2021 dataflow.`);
+    }
+    const population = extractValue(data);
+    return createSuccessResponse({
+        postcode,
+        median_weekly_household_income: 1500, // Sample - requires Census dataset
+        total_population: population,
+        note: "Using sample population data. Configure postcode dimension for accurate results."
+    });
+}
+/**
+ * Get mortgage stress indicator for a region
+ */
+async function handleGetMortgageStress(region) {
+    validateRegion(region);
+    const endpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2023&endPeriod=2023`;
+    const data = await fetchABSData(endpoint);
+    if (data.error) {
+        return createErrorResponse(`Unable to retrieve mortgage stress data for region "${region}".\n` +
+            `Issue: ${data.error}\n` +
+            `Note: Accurate region-level data requires SDMX dimension configuration.`);
+    }
+    const lendingValue = extractValue(data);
+    return createSuccessResponse({
+        region,
+        mortgage_stress: lendingValue,
+        note: "Using housing lending data as proxy. Value represents lending indicator, not direct stress measure."
+    });
+}
+/**
+ * Get supply pipeline analysis: identify supply flood risk or buy signals
+ */
+async function handleGetSupplyPipeline(postcode) {
+    validatePostcode(postcode);
+    const endpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
+    const data = await fetchABSData(endpoint);
+    if (data.error) {
+        return createErrorResponse(`Unable to retrieve building approvals for postcode ${postcode}.\n` +
+            `Issue: ${data.error}\n` +
+            `Note: Configure REGION/SA2 dimensions for postcode-level precision.`);
+    }
+    const approvals = extractValue(data);
+    const supplySignal = approvals && approvals > 100000 ? 'FLOOD_RISK' :
+        approvals && approvals < 50000 ? 'BUY_SIGNAL' : 'NEUTRAL';
+    return createSuccessResponse({
+        postcode,
+        dwelling_approvals: approvals,
+        supply_signal: supplySignal,
+        market_insight: approvals && approvals > 100000 ?
+            '⚠️ HIGH SUPPLY COMING: Suburb may be flooded with new units - oversupply risk' :
+            '✅ SUPPLY DEAD: Low approvals indicate tight market - potential buy signal',
+        note: "Using BUILDING_ACTIVITY dataflow. Configure REGION/SA2 dimensions for postcode-level precision."
+    });
+}
+/**
+ * Get wealth migration: track equity flow from wealthy areas
+ */
+async function handleGetWealthMigration(region) {
+    validateRegion(region);
+    const migrationEndpoint = `${ABS_API_BASE}ABS,ABS_REGIONAL_MIGRATION/all?startPeriod=2022&endPeriod=2023`;
+    const migrationData = await fetchABSData(migrationEndpoint);
+    const popEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+    const popData = await fetchABSData(popEndpoint);
+    if (migrationData.error && popData.error) {
+        return createErrorResponse(`Unable to retrieve wealth migration data for region "${region}".\n` +
+            `Issues: ${migrationData.error} / ${popData.error}\n` +
+            `Note: Configure ORIGIN_SA4/DEST_SA4 dimensions for Sydney→Regional wealth migration tracking.`);
+    }
+    const migrationFlow = extractValue(migrationData);
+    const population = extractValue(popData);
+    const equitySignal = migrationFlow && migrationFlow > 5000 ? 'WEALTH_INFLUX' : 'STABLE';
+    return createSuccessResponse({
+        region,
+        net_migration: migrationFlow,
+        population_base: population,
+        equity_flow_signal: equitySignal,
+        market_insight: migrationFlow && migrationFlow > 5000 ?
+            '💰 EQUITY FLOWING IN: Strong migration from wealthy metro areas detected' :
+            '📊 STABLE MARKET: Organic population growth without major equity influx',
+        note: "Using ABS_REGIONAL_MIGRATION. Configure ORIGIN_SA4/DEST_SA4 to track Sydney→Regional wealth migration."
+    });
+}
+/**
+ * Get investor sentiment: detect if market is FHB or investor driven
+ */
+async function handleGetInvestorSentiment(region) {
+    validateRegion(region);
+    const endpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2023&endPeriod=2024`;
+    const data = await fetchABSData(endpoint);
+    if (data.error) {
+        return createErrorResponse(`Unable to retrieve investor sentiment data for region "${region}".\n` +
+            `Issue: ${data.error}\n` +
+            `Note: Configure PURPOSE dimension to split investor vs owner-occupier lending.`);
+    }
+    const lendingVolume = extractValue(data);
+    const marketDriver = lendingVolume && lendingVolume > 150 ? 'INVESTOR_DRIVEN' :
+        lendingVolume && lendingVolume > 80 ? 'MIXED_MARKET' : 'FHB_MARKET';
+    return createSuccessResponse({
+        region,
+        lending_volume: lendingVolume,
+        market_driver: marketDriver,
+        market_insight: lendingVolume && lendingVolume > 150 ?
+            '🏢 INVESTOR STAMPEDE: High lending activity indicates investor dominance - prices may surge' :
+            lendingVolume && lendingVolume > 80 ?
+                '⚖️ BALANCED MARKET: Mixed investor/FHB activity - stable growth expected' :
+                '🏠 FHB TERRITORY: Low volumes suggest first-home buyer market - organic demand',
+        note: "Using LEND_HOUSING dataflow. Configure PURPOSE dimension to split investor/owner-occupier lending."
+    });
+}
+/**
+ * Get gentrification score: compare investment vs income growth
+ */
+async function handleGetGentrificationScore(postcode) {
+    validatePostcode(postcode);
+    const lendingEndpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2022&endPeriod=2024`;
+    const lendingData = await fetchABSData(lendingEndpoint);
+    const incomeEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+    const incomeData = await fetchABSData(incomeEndpoint);
+    if (lendingData.error && incomeData.error) {
+        return createErrorResponse(`Unable to calculate gentrification score for postcode ${postcode}.\n` +
+            `Issues: ${lendingData.error} / ${incomeData.error}\n` +
+            `Note: Configure Census G02 INCP dimension for actual income data.`);
+    }
+    const investmentGrowth = extractValue(lendingData) || 100;
+    const incomeBase = extractValue(incomeData) || 1000;
+    const estimatedIncome = Math.floor(incomeBase * 50); // Proxy: $50 per capita
+    // Calculate gentrification score: Investment growth vs income capacity
+    const gentrificationScore = investmentGrowth / (estimatedIncome / 1000);
+    const signal = gentrificationScore > 2.0 ? 'RAPID_GENTRIFICATION' :
+        gentrificationScore > 1.2 ? 'GENTRIFYING' : 'STABLE';
+    return createSuccessResponse({
+        postcode,
+        investment_lending: investmentGrowth,
+        estimated_income: estimatedIncome,
+        gentrification_score: Math.round(gentrificationScore * 100) / 100,
+        signal,
+        market_insight: gentrificationScore > 2.0 ?
+            '🚀 RAPID GENTRIFICATION: Investment growth massively outpacing income - displacement risk' :
+            gentrificationScore > 1.2 ?
+                '📈 GENTRIFYING: Investment exceeds income growth - early-stage transformation' :
+                '🏘️ STABLE COMMUNITY: Investment aligned with income levels - organic growth',
+        note: "Using LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
+    });
+}
+// ============================================================================
+// MCP SERVER SETUP
+// ============================================================================
 const server = new Server({
     name: 'abs-mcp-server',
     version: '1.0.0',
@@ -172,240 +385,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
         const { name, arguments: args } = request.params;
-        if (name === 'get_suburb_stats') {
-            const { postcode } = args;
-            // Using ERP (Estimated Resident Population) data - returns aggregate stats
-            const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-            const data = await fetchABSData(endpoint);
-            if (data.error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Error: ${data.error}. Note: Postcode-level filtering requires dimension configuration.`,
-                        },
-                    ],
-                    isError: true,
-                };
-            }
-            const population = extractValue(data);
-            // Return sample data - real implementation would filter by postcode dimension
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            postcode,
-                            median_weekly_household_income: 1500, // Sample value - needs Census dataset
-                            total_population: population,
-                            note: "Using sample population data. Configure postcode dimension for accurate results."
-                        }, null, 2),
-                    },
-                ],
-            };
+        switch (name) {
+            case 'get_suburb_stats':
+                return await handleGetSuburbStats(args.postcode);
+            case 'get_mortgage_stress':
+                return await handleGetMortgageStress(args.region);
+            case 'get_supply_pipeline':
+                return await handleGetSupplyPipeline(args.postcode);
+            case 'get_wealth_migration':
+                return await handleGetWealthMigration(args.region);
+            case 'get_investor_sentiment':
+                return await handleGetInvestorSentiment(args.region);
+            case 'get_gentrification_score':
+                return await handleGetGentrificationScore(args.postcode);
+            default:
+                return createErrorResponse(`Unknown tool: "${name}". Available tools are: get_suburb_stats, get_mortgage_stress, ` +
+                    `get_supply_pipeline, get_wealth_migration, get_investor_sentiment, get_gentrification_score.`);
         }
-        if (name === 'get_mortgage_stress') {
-            const { region } = args;
-            // Using housing lending data as proxy for mortgage stress
-            const endpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2023&endPeriod=2023`;
-            const data = await fetchABSData(endpoint);
-            if (data.error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Error: ${data.error}`,
-                        },
-                    ],
-                    isError: true,
-                };
-            }
-            const lendingValue = extractValue(data);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            region,
-                            mortgage_stress: lendingValue,
-                            note: "Using housing lending data. Value represents lending indicator, not direct stress measure."
-                        }, null, 2),
-                    },
-                ],
-            };
-        }
-        if (name === 'get_supply_pipeline') {
-            const { postcode } = args;
-            // KILLER FEATURE: Identifies supply flood risk or buy signals from building approvals
-            const endpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
-            const data = await fetchABSData(endpoint);
-            if (data.error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Error: ${data.error}`,
-                        },
-                    ],
-                    isError: true,
-                };
-            }
-            const approvals = extractValue(data);
-            const supplySignal = approvals && approvals > 100000 ? 'FLOOD_RISK' :
-                approvals && approvals < 50000 ? 'BUY_SIGNAL' : 'NEUTRAL';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            postcode,
-                            dwelling_approvals: approvals,
-                            supply_signal: supplySignal,
-                            market_insight: approvals && approvals > 100000 ?
-                                '⚠️ HIGH SUPPLY COMING: Suburb may be flooded with new units - oversupply risk' :
-                                '✅ SUPPLY DEAD: Low approvals indicate tight market - potential buy signal',
-                            note: "Using BUILDING_ACTIVITY dataflow. Configure REGION/SA2 dimensions for postcode-level precision."
-                        }, null, 2),
-                    },
-                ],
-            };
-        }
-        if (name === 'get_wealth_migration') {
-            const { region } = args;
-            // KILLER FEATURE: Tracks "Equity Flow" from wealthy Sydney suburbs to regional areas
-            const migrationEndpoint = `${ABS_API_BASE}ABS,ABS_REGIONAL_MIGRATION/all?startPeriod=2022&endPeriod=2023`;
-            const migrationData = await fetchABSData(migrationEndpoint);
-            const popEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-            const popData = await fetchABSData(popEndpoint);
-            if (migrationData.error && popData.error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Error: ${migrationData.error || popData.error}`,
-                        },
-                    ],
-                    isError: true,
-                };
-            }
-            const migrationFlow = extractValue(migrationData);
-            const population = extractValue(popData);
-            const equitySignal = migrationFlow && migrationFlow > 5000 ? 'WEALTH_INFLUX' : 'STABLE';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            region,
-                            net_migration: migrationFlow,
-                            population_base: population,
-                            equity_flow_signal: equitySignal,
-                            market_insight: migrationFlow && migrationFlow > 5000 ?
-                                '💰 EQUITY FLOWING IN: Strong migration from wealthy metro areas detected' :
-                                '📊 STABLE MARKET: Organic population growth without major equity influx',
-                            note: "Using ABS_REGIONAL_MIGRATION. Configure ORIGIN_SA4/DEST_SA4 to track Sydney→Regional wealth migration."
-                        }, null, 2),
-                    },
-                ],
-            };
-        }
-        if (name === 'get_investor_sentiment') {
-            const { region } = args;
-            // KILLER FEATURE: Detects if market is FHB (First Home Buyer) or Investor driven
-            const endpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2023&endPeriod=2024`;
-            const data = await fetchABSData(endpoint);
-            if (data.error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Error: ${data.error}`,
-                        },
-                    ],
-                    isError: true,
-                };
-            }
-            const lendingVolume = extractValue(data);
-            // Heuristic: High lending volumes (>150) suggest investor-driven market
-            const marketDriver = lendingVolume && lendingVolume > 150 ? 'INVESTOR_DRIVEN' :
-                lendingVolume && lendingVolume > 80 ? 'MIXED_MARKET' : 'FHB_MARKET';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            region,
-                            lending_volume: lendingVolume,
-                            market_driver: marketDriver,
-                            market_insight: lendingVolume && lendingVolume > 150 ?
-                                '🏢 INVESTOR STAMPEDE: High lending activity indicates investor dominance - prices may surge' :
-                                lendingVolume && lendingVolume > 80 ?
-                                    '⚖️ BALANCED MARKET: Mixed investor/FHB activity - stable growth expected' :
-                                    '🏠 FHB TERRITORY: Low volumes suggest first-home buyer market - organic demand',
-                            note: "Using LEND_HOUSING dataflow. Configure PURPOSE dimension to split investor/owner-occupier lending."
-                        }, null, 2),
-                    },
-                ],
-            };
-        }
-        if (name === 'get_gentrification_score') {
-            const { postcode } = args;
-            // KILLER FEATURE: Compares investment growth vs employee income growth to detect gentrification
-            const lendingEndpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2022&endPeriod=2024`;
-            const lendingData = await fetchABSData(lendingEndpoint);
-            const incomeEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-            const incomeData = await fetchABSData(incomeEndpoint);
-            if (lendingData.error && incomeData.error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Error: ${lendingData.error || incomeData.error}`,
-                        },
-                    ],
-                    isError: true,
-                };
-            }
-            const investmentGrowth = extractValue(lendingData) || 100;
-            const incomeBase = extractValue(incomeData) || 1000;
-            const estimatedIncome = Math.floor(incomeBase * 50); // Proxy: $50 per capita
-            // Calculate gentrification score: Investment growth vs income capacity
-            const gentrificationScore = investmentGrowth / (estimatedIncome / 1000);
-            const signal = gentrificationScore > 2.0 ? 'RAPID_GENTRIFICATION' :
-                gentrificationScore > 1.2 ? 'GENTRIFYING' : 'STABLE';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            postcode,
-                            investment_lending: investmentGrowth,
-                            estimated_income: estimatedIncome,
-                            gentrification_score: Math.round(gentrificationScore * 100) / 100,
-                            signal: signal,
-                            market_insight: gentrificationScore > 2.0 ?
-                                '🚀 RAPID GENTRIFICATION: Investment growth massively outpacing income - displacement risk' :
-                                gentrificationScore > 1.2 ?
-                                    '📈 GENTRIFYING: Investment exceeds income growth - early-stage transformation' :
-                                    '🏘️ STABLE COMMUNITY: Investment aligned with income levels - organic growth',
-                            note: "Using LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
-                        }, null, 2),
-                    },
-                ],
-            };
-        }
-        throw new Error(`Unknown tool: ${name}`);
     }
     catch (error) {
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: `Error: ${error.message}`,
-                },
-            ],
-            isError: true,
-        };
+        const message = error instanceof ValidationError
+            ? error.message // Validation errors are already user-friendly
+            : error instanceof Error
+                ? error.message
+                : String(error);
+        return createErrorResponse(`Error executing tool: ${message}`);
     }
 });
 const transport = new StdioServerTransport();
