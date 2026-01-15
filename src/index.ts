@@ -22,6 +22,12 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ============================================================================
 // CONFIGURATION & CONSTANTS
@@ -29,27 +35,6 @@ import fetch from 'node-fetch';
 
 const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
 const SDMX_JSON_HEADER = 'application/vnd.sdmx.data+json;version=1.0.0-wd';
-
-// ABS Postcode to SA2 concordance
-// Using minimal embedded dataset for key Australian postcodes
-// In production, this should download from ABS or use full allocation file
-const POSTCODE_SA2_DATA = `POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
-2000,11703,Sydney - Haymarket - The Rocks,1,New South Wales
-2000,11704,Sydney - CBD,1,New South Wales
-2060,12002,North Sydney - Lavender Bay,1,New South Wales
-2010,11801,Surry Hills,1,New South Wales
-2021,12102,Paddington - Moore Park,1,New South Wales
-3000,20601,Melbourne,2,Victoria
-3000,20602,Melbourne - Remainder,2,Victoria
-3001,20604,Southbank,2,Victoria
-3004,20701,St Kilda - Balaclava,2,Victoria
-4000,30101,Brisbane City,3,Queensland
-4000,30102,Spring Hill,3,Queensland
-5000,40101,Adelaide,4,South Australia
-6000,50201,Perth City,5,Western Australia
-7000,60101,Hobart,6,Tasmania
-0800,70101,Darwin,7,Northern Territory
-2600,80101,Canberra,8,Australian Capital Territory`;
 
 // ============================================================================
 // GEOGRAPHY CACHE
@@ -110,9 +95,10 @@ async function initializeGeographyCache(): Promise<void> {
   try {
     console.error('[Geography Cache] Initializing postcode-to-SA2 mapping...');
     
-    // Use embedded dataset for key Australian postcodes
-    // In production, this should fetch from ABS API or download full allocation file
-    const csvText = POSTCODE_SA2_DATA;
+    // Load postcode data from CSV file
+    const csvPath = join(__dirname, 'postcodes.csv');
+    console.error(`[Geography Cache] Loading from ${csvPath}`);
+    const csvText = readFileSync(csvPath, 'utf-8');
     const lines = csvText.split('\n');
     
     // Skip header line
@@ -136,12 +122,11 @@ async function initializeGeographyCache(): Promise<void> {
     }
     
     cacheInitialized = true;
-    console.error(`[Geography Cache] Initialized with ${geographyCache.size} postcodes mapped to SA2 codes`);
-    console.error('[Geography Cache] Note: Using embedded dataset for major Australian cities. Expand dataset for production use.');
+    console.error(`[Geography Cache] ✓ Initialized with ${geographyCache.size} postcodes mapped to SA2 codes`);
   } catch (error) {
     cacheError = `Failed to initialize geography cache: ${error instanceof Error ? error.message : String(error)}`;
     console.error(`[Geography Cache] ERROR: ${cacheError}`);
-    console.error('[Geography Cache] Server will return national aggregate data until cache is available.');
+    console.error('[Geography Cache] Server will return errors for postcode-based queries until cache is available.');
   }
 }
 
