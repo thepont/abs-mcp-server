@@ -21,6 +21,7 @@ import fetch from 'node-fetch';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import * as turf from '@turf/turf';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // ============================================================================
@@ -38,6 +39,9 @@ const SDMX_JSON_HEADER = 'application/vnd.sdmx.data+json;version=1.0.0-wd';
 const geographyCache = new Map();
 let cacheInitialized = false;
 let cacheError = null;
+let geoFeatures = null;
+let geoBoundariesInitialized = false;
+let geoBoundariesError = null;
 // ============================================================================
 // INPUT VALIDATION
 // ============================================================================
@@ -126,6 +130,109 @@ function getCacheStatus() {
         postcodes: geographyCache.size,
         error: cacheError
     };
+}
+/**
+ * Initializes SA2 boundary geospatial data for reverse geocoding
+ * Loads sa2-boundaries.json on server startup
+ */
+async function initializeGeoBoundaries() {
+    try {
+        console.error('[Geospatial] Loading SA2 boundaries...');
+        const geoPath = join(__dirname, 'sa2-boundaries.json');
+        const geoText = readFileSync(geoPath, 'utf-8');
+        geoFeatures = JSON.parse(geoText);
+        geoBoundariesInitialized = true;
+        console.error(`[Geospatial] ✓ Loaded ${geoFeatures?.features.length || 0} SA2 boundaries`);
+    }
+    catch (error) {
+        geoBoundariesError = `Failed to load geospatial boundaries: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(`[Geospatial] ERROR: ${geoBoundariesError}`);
+        console.error('[Geospatial] Reverse geocoding (lat/long → SA2) will not be available.');
+    }
+}
+/**
+ * Reverse geocodes latitude/longitude to SA2 code using point-in-polygon
+ * Returns SA2 code if point is within a SA2 boundary, null otherwise
+ */
+function latLongToSA2(latitude, longitude) {
+    if (!geoBoundariesInitialized || !geoFeatures) {
+        return null;
+    }
+    // Validate coordinates
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return null;
+    }
+    try {
+        const point = turf.point([longitude, latitude]); // Turf expects [lng, lat]
+        // Search through all SA2 features for point-in-polygon match
+        for (const feature of geoFeatures.features) {
+            try {
+                // Handle both Polygon and MultiPolygon geometries
+                if (feature.geometry.type === 'Polygon') {
+                    if (turf.booleanPointInPolygon(point, {
+                        type: 'Feature',
+                        properties: {},
+                        geometry: feature.geometry
+                    })) {
+                        return {
+                            sa2Code: feature.properties.SA2_CODE,
+                            sa2Name: feature.properties.SA2_NAME
+                        };
+                    }
+                }
+                else if (feature.geometry.type === 'MultiPolygon') {
+                    // For MultiPolygon, check each polygon individually
+                    const multiPolygon = feature.geometry;
+                    for (const polygonCoords of multiPolygon.coordinates) {
+                        if (turf.booleanPointInPolygon(point, {
+                            type: 'Feature',
+                            properties: {},
+                            geometry: {
+                                type: 'Polygon',
+                                coordinates: polygonCoords
+                            }
+                        })) {
+                            return {
+                                sa2Code: feature.properties.SA2_CODE,
+                                sa2Name: feature.properties.SA2_NAME
+                            };
+                        }
+                    }
+                }
+            }
+            catch (featureError) {
+                // Skip features that cause geometry errors
+                continue;
+            }
+        }
+        // No SA2 found for this coordinate (e.g., ocean, outside AU)
+        return null;
+    }
+    catch (error) {
+        console.error('[Geospatial] Error in point-in-polygon lookup:', error);
+        return null;
+    }
+}
+/**
+ * Looks up postcode for a given latitude/longitude
+ * Uses reverse geocoding (lat/long → SA2) then SA2 → postcode
+ */
+function getPostcodeFromCoordinates(latitude, longitude) {
+    const sa2Result = latLongToSA2(latitude, longitude);
+    if (!sa2Result) {
+        return null;
+    }
+    // Find a postcode that maps to this SA2 code
+    for (const [postcode, sa2Codes] of geographyCache.entries()) {
+        if (sa2Codes.includes(sa2Result.sa2Code)) {
+            return {
+                postcode,
+                sa2Code: sa2Result.sa2Code,
+                sa2Name: sa2Result.sa2Name
+            };
+        }
+    }
+    return null;
 }
 // ============================================================================
 // ABS API HELPERS
@@ -584,6 +691,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 // Initialize geography cache before accepting requests
 await initializeGeographyCache();
+// Initialize geospatial boundaries for reverse geocoding
+await initializeGeoBoundaries();
 const transport = new StdioServerTransport();
 await server.connect(transport);
 const cacheStatus = getCacheStatus();
@@ -593,4 +702,12 @@ if (cacheStatus.initialized) {
 else {
     console.error('[Server] Running with limited functionality - geography cache failed to initialize');
     console.error(`[Server] Cache error: ${cacheStatus.error}`);
+}
+if (geoBoundariesInitialized && geoFeatures != null) {
+    const featureCount = geoFeatures.features.length;
+    console.error(`[Server] Geospatial reverse geocoding available (${featureCount} SA2 boundaries)`);
+}
+else if (geoBoundariesError) {
+    console.error('[Server] Geospatial features unavailable');
+    console.error(`[Server] Geospatial error: ${geoBoundariesError}`);
 }
