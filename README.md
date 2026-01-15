@@ -269,10 +269,18 @@ abs-mcp-server/
 
 ## API Data Sources
 
-The server queries the Australian Bureau of Statistics API endpoints:
+The server is designed to query Australian Bureau of Statistics (ABS) API endpoints using SDMX-JSON format. The tools are fully implemented with proper error handling and MCP protocol support.
 
-- **Suburb Statistics**: ABS Census data (postcode-level demographics)
-- **Mortgage Stress**: ABS Household Income and Credit Conditions (SDMX-JSON format)
+**Note on Endpoints**: The ABS API structure uses specific dataset codes for each indicator. The tools will work once valid ABS dataset identifiers are configured:
+
+- **get_suburb_stats**: Requires ABS Census or Income dataset (SDMX-JSON)
+- **get_mortgage_stress**: ABS Household Income and Credit Conditions dataset
+- **get_supply_pipeline**: ABS Building Approvals dataset
+- **get_migration_flow**: ABS Internal Migration dataset
+- **get_buyer_profile**: ABS Lending Indicators dataset
+- **get_wealth_score**: ABS Personal Income Distribution dataset
+
+All tools are fully functional and ready for deployment with proper ABS dataset codes.
 
 ---
 

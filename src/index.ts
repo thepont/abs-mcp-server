@@ -41,7 +41,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
 
-const ABS_API_BASE = 'https://api.data.abs.gov.au/data/';
+// Note: ABS API redirects to rest/data/ endpoint
+const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
 
 // Helper to fetch SDMX-JSON and handle errors
 async function fetchABSData(endpoint: string): Promise<any> {
