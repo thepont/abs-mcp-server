@@ -1,0 +1,12 @@
+{
+  "api_key": "YOUR_GEMINI_API_KEY_HERE",
+  "model": "gemini-2.0-flash",
+  "tools": [
+    {
+      "name": "abs-mcp-server",
+      "description": "ABS socio-economic data context API",
+      "command": "node",
+      "args": ["/Users/paulesson/projects/abs-mcp-server/dist/index.js"]
+    }
+  ]
+}
