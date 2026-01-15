@@ -11,10 +11,17 @@ A Model Context Protocol (MCP) server for accessing Australian Bureau of Statist
 
 ## Overview
 
-**abs-mcp-server** provides two main tools:
+**abs-mcp-server** provides six tools for Australian socio-economic analysis:
 
+**Core Demographics:**
 1. **get_suburb_stats** - Get median weekly household income and population for an Australian postcode
 2. **get_mortgage_stress** - Get household debt/mortgage-to-income ratios for a region
+
+**Real Estate Market Analysis:**
+3. **get_supply_pipeline** - Get building approvals for a postcode (Are they building too much or too little here?)
+4. **get_migration_flow** - Get internal migration data for a region (Is the population actually growing from interstate moves?)
+5. **get_buyer_profile** - Get lending indicators for a region (Is this market being driven by moms and dads or big investors?)
+6. **get_wealth_score** - Get personal income distribution for a postcode (Is the income bracket of this suburb shifting upward?)
 
 The server runs in Docker and is discoverable via Docker MCP, making it seamlessly available to Gemini CLI and other MCP clients.
 
@@ -75,6 +82,10 @@ gemini "List all available MCP tools" --allowed-mcp-server-names abs-mcp-server
 You should see:
 - `get_suburb_stats` (postcode: string)
 - `get_mortgage_stress` (region: string)
+- `get_supply_pipeline` (postcode: string)
+- `get_migration_flow` (region: string)
+- `get_buyer_profile` (region: string)
+- `get_wealth_score` (postcode: string)
 
 ---
 
@@ -110,6 +121,88 @@ Get household debt or mortgage-to-income ratios for a given region.
 **Example Usage:**
 ```bash
 gemini "What's the mortgage stress for Melbourne?" --allowed-mcp-server-names abs-mcp-server
+```
+
+---
+
+## Real Estate Market Analysis Tools
+
+### get_supply_pipeline
+
+Get building approvals data for a postcode to understand construction activity.
+
+**Input:**
+```json
+{
+  "postcode": "2000"  // 4-digit Australian postcode
+}
+```
+
+**Use Case:** Are they building too much or too little here?
+
+**Example Usage:**
+```bash
+gemini "What's the supply pipeline for Sydney 2000?" --allowed-mcp-server-names abs-mcp-server
+```
+
+---
+
+### get_migration_flow
+
+Get internal migration data for a region to assess population growth from interstate moves.
+
+**Input:**
+```json
+{
+  "region": "Sydney"  // Region name or identifier
+}
+```
+
+**Use Case:** Is the population actually growing from interstate moves?
+
+**Example Usage:**
+```bash
+gemini "What's the migration flow into Melbourne?" --allowed-mcp-server-names abs-mcp-server
+```
+
+---
+
+### get_buyer_profile
+
+Get lending indicators for a region to understand buyer composition.
+
+**Input:**
+```json
+{
+  "region": "Sydney"  // Region name or identifier
+}
+```
+
+**Use Case:** Is this market being driven by moms and dads or big investors?
+
+**Example Usage:**
+```bash
+gemini "What are the lending indicators for Brisbane?" --allowed-mcp-server-names abs-mcp-server
+```
+
+---
+
+### get_wealth_score
+
+Get personal income distribution data for a postcode to track wealth trends.
+
+**Input:**
+```json
+{
+  "postcode": "3000"  // 4-digit Australian postcode
+}
+```
+
+**Use Case:** Is the income bracket of this suburb shifting upward?
+
+**Example Usage:**
+```bash
+gemini "What's the wealth score for postcode 3000?" --allowed-mcp-server-names abs-mcp-server
 ```
 
 ---

@@ -90,6 +90,64 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     required: ['region'],
                 },
             },
+            {
+                name: 'get_supply_pipeline',
+                description: 'Are they building too much or too little here? Get building approvals data for a postcode.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        postcode: {
+                            type: 'string',
+                            pattern: '^\\d{4}$',
+                            description: 'Australian postcode (4 digits)',
+                        },
+                    },
+                    required: ['postcode'],
+                },
+            },
+            {
+                name: 'get_migration_flow',
+                description: 'Is the population actually growing from interstate moves? Get internal migration data for a region.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        region: {
+                            type: 'string',
+                            description: 'Region (postcode or area code)',
+                        },
+                    },
+                    required: ['region'],
+                },
+            },
+            {
+                name: 'get_buyer_profile',
+                description: 'Is this market being driven by moms and dads or big investors? Get lending indicators for a region.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        region: {
+                            type: 'string',
+                            description: 'Region (postcode or area code)',
+                        },
+                    },
+                    required: ['region'],
+                },
+            },
+            {
+                name: 'get_wealth_score',
+                description: 'Is the income bracket of this suburb shifting upward? Get personal income distribution for a postcode.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        postcode: {
+                            type: 'string',
+                            pattern: '^\\d{4}$',
+                            description: 'Australian postcode (4 digits)',
+                        },
+                    },
+                    required: ['postcode'],
+                },
+            },
         ],
     };
 });
@@ -147,6 +205,106 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     {
                         type: 'text',
                         text: JSON.stringify({ region, mortgage_stress: stress }, null, 2),
+                    },
+                ],
+            };
+        }
+        if (name === 'get_supply_pipeline') {
+            const { postcode } = args;
+            const endpoint = `${ABS_API_BASE}explorer/BUILDING_APPROVALS/postcode/${postcode}`;
+            const data = await fetchABSData(endpoint);
+            if (data.error) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Error: ${data.error}`,
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            const approvals = data.dataSets?.[0]?.series?.[0]?.observations?.[0]?.value ?? null;
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({ postcode, building_approvals: approvals }, null, 2),
+                    },
+                ],
+            };
+        }
+        if (name === 'get_migration_flow') {
+            const { region } = args;
+            const endpoint = `${ABS_API_BASE}explorer/INTERNAL_MIGRATION/region/${region}`;
+            const data = await fetchABSData(endpoint);
+            if (data.error) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Error: ${data.error}`,
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            const migration = data.dataSets?.[0]?.series?.[0]?.observations?.[0]?.value ?? null;
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({ region, internal_migration: migration }, null, 2),
+                    },
+                ],
+            };
+        }
+        if (name === 'get_buyer_profile') {
+            const { region } = args;
+            const endpoint = `${ABS_API_BASE}explorer/LENDING_INDICATORS/region/${region}`;
+            const data = await fetchABSData(endpoint);
+            if (data.error) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Error: ${data.error}`,
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            const lending = data.dataSets?.[0]?.series?.[0]?.observations?.[0]?.value ?? null;
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({ region, lending_indicators: lending }, null, 2),
+                    },
+                ],
+            };
+        }
+        if (name === 'get_wealth_score') {
+            const { postcode } = args;
+            const endpoint = `${ABS_API_BASE}explorer/PERSONAL_INCOME/postcode/${postcode}`;
+            const data = await fetchABSData(endpoint);
+            if (data.error) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Error: ${data.error}`,
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            const income = data.dataSets?.[0]?.series?.[0]?.observations?.[0]?.value ?? null;
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({ postcode, personal_income: income }, null, 2),
                     },
                 ],
             };
