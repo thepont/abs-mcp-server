@@ -18,10 +18,22 @@ A Model Context Protocol (MCP) server for accessing Australian Bureau of Statist
 2. **get_mortgage_stress** - Get household debt/mortgage-to-income ratios for a region
 
 **Real Estate Market Analysis:**
-3. **get_supply_pipeline** - Get building approvals for a postcode (Are they building too much or too little here?)
-4. **get_migration_flow** - Get internal migration data for a region (Is the population actually growing from interstate moves?)
-5. **get_buyer_profile** - Get lending indicators for a region (Is this market being driven by moms and dads or big investors?)
-6. **get_wealth_score** - Get personal income distribution for a postcode (Is the income bracket of this suburb shifting upward?)
+3. **get_supply_pipeline** - Analyze building approvals vs existing stock (supply flood risk or buy signals)
+4. **get_wealth_migration** - Analyze migration inflow vs housing supply (demand/supply dynamics)
+5. **get_investor_sentiment** - Analyze lending patterns (investor-driven vs first-home buyer markets)
+6. **get_gentrification_score** - Compare investment growth vs income levels (gentrification indicators)
+
+### Geography Cache System
+
+The server implements an intelligent geography cache that:
+- **Loads on startup** - Postcode-to-SA2 mapping initialized before accepting requests
+- **Validates postcodes** - Ensures postcode exists in the cache before making API calls
+- **Maps to ABS geography** - Translates postcodes to Statistical Area Level 2 (SA2) codes
+- **Fast lookups** - In-memory cache provides instant postcode validation
+
+**Current Coverage**: 13 major Australian postcodes (capital cities: Sydney, Melbourne, Brisbane, Adelaide, Perth, Hobart, Darwin, Canberra)
+
+**For Production**: Expand the embedded dataset in `src/index.ts` to include all ~3000 Australian postcodes, or implement dynamic download from ABS allocation files.
 
 The server runs in Docker and is discoverable via Docker MCP, making it seamlessly available to Gemini CLI and other MCP clients.
 
