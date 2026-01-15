@@ -18,7 +18,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as turf from '@turf/turf';
@@ -73,23 +73,63 @@ function validateRegion(region) {
 // GEOGRAPHY CACHE INITIALIZATION
 // ============================================================================
 /**
- * Downloads and parses ABS postcode-to-SA2 concordance file
+ * Loads postcode-to-SA2 concordance file from cache or embedded source
  * Caches the mapping in memory for fast lookups
+ * Runtime loading allows data updates without rebuilds
  */
 async function initializeGeographyCache() {
     try {
         console.error('[Geography Cache] Initializing postcode-to-SA2 mapping...');
-        // Load postcode data from CSV file
-        const csvPath = join(__dirname, 'postcodes.csv');
-        console.error(`[Geography Cache] Loading from ${csvPath}`);
-        const csvText = readFileSync(csvPath, 'utf-8');
+        const dataDir = join(__dirname, '..', '.data');
+        const cachePath = join(dataDir, 'postcodes.csv');
+        const cacheMaxAge = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+        // Check if cached file exists and is fresh
+        let useCache = false;
+        if (existsSync(cachePath)) {
+            try {
+                const stats = statSync(cachePath);
+                const age = Date.now() - stats.mtimeMs;
+                if (age < cacheMaxAge) {
+                    console.error(`[Geography Cache] Cache valid (age: ${Math.floor(age / 1000 / 60)} minutes)`);
+                    useCache = true;
+                }
+                else {
+                    console.error(`[Geography Cache] Cache stale (age: ${Math.floor(age / 1000 / 60 / 60)} hours), will refresh`);
+                }
+            }
+            catch (e) {
+                console.error('[Geography Cache] Could not check cache age, will refresh');
+            }
+        }
+        let csvText;
+        if (useCache) {
+            console.error('[Geography Cache] Loading from cache...');
+            csvText = readFileSync(cachePath, 'utf-8');
+        }
+        else {
+            // Load from embedded source (src/postcodes.csv)
+            console.error('[Geography Cache] Loading from embedded data...');
+            const embeddedPath = join(__dirname, '..', 'src', 'postcodes.csv');
+            csvText = readFileSync(embeddedPath, 'utf-8');
+            // Save to cache for next startup
+            try {
+                if (!existsSync(dataDir)) {
+                    mkdirSync(dataDir, { recursive: true });
+                }
+                writeFileSync(cachePath, csvText, 'utf-8');
+                console.error('[Geography Cache] Cached postcodes for next startup');
+            }
+            catch (cacheWriteError) {
+                console.error('[Geography Cache] Warning: Could not write cache:', cacheWriteError instanceof Error ? cacheWriteError.message : String(cacheWriteError));
+                // Continue anyway - cache write failure is not critical
+            }
+        }
+        // Parse CSV: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
         const lines = csvText.split('\n');
-        // Skip header line
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line)
                 continue;
-            // CSV format: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
             const parts = line.split(',');
             if (parts.length < 2)
                 continue;
@@ -108,7 +148,7 @@ async function initializeGeographyCache() {
     catch (error) {
         cacheError = `Failed to initialize geography cache: ${error instanceof Error ? error.message : String(error)}`;
         console.error(`[Geography Cache] ERROR: ${cacheError}`);
-        console.error('[Geography Cache] Server will return errors for postcode-based queries until cache is available.');
+        console.error('[Geography Cache] Postcode-based queries may be unavailable; SA2 boundaries are still functional.');
     }
 }
 /**
@@ -133,19 +173,61 @@ function getCacheStatus() {
 }
 /**
  * Initializes SA2 boundary geospatial data for reverse geocoding
- * Loads sa2-boundaries.json on server startup
+ * Loads from cache or embedded source, with staleness checking
+ * Runtime loading allows data updates without rebuilds
  */
 async function initializeGeoBoundaries() {
     try {
-        console.error('[Geospatial] Loading SA2 boundaries...');
-        const geoPath = join(__dirname, 'sa2-boundaries.json');
-        const geoText = readFileSync(geoPath, 'utf-8');
+        console.error('[Geospatial] Initializing SA2 boundaries...');
+        const dataDir = join(__dirname, '..', '.data');
+        const cachePath = join(dataDir, 'sa2-boundaries.json');
+        const cacheMaxAge = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+        // Check if cached file exists and is fresh
+        let useCache = false;
+        if (existsSync(cachePath)) {
+            try {
+                const stats = statSync(cachePath);
+                const age = Date.now() - stats.mtimeMs;
+                if (age < cacheMaxAge) {
+                    console.error(`[Geospatial] Cache valid (age: ${Math.floor(age / 1000 / 60)} minutes)`);
+                    useCache = true;
+                }
+                else {
+                    console.error(`[Geospatial] Cache stale (age: ${Math.floor(age / 1000 / 60 / 60)} hours), will refresh`);
+                }
+            }
+            catch (e) {
+                console.error('[Geospatial] Could not check cache age, will refresh');
+            }
+        }
+        let geoText;
+        if (useCache) {
+            console.error('[Geospatial] Loading SA2 boundaries from cache...');
+            geoText = readFileSync(cachePath, 'utf-8');
+        }
+        else {
+            console.error('[Geospatial] Loading SA2 boundaries from embedded data...');
+            const embeddedPath = join(__dirname, '..', 'src', 'sa2-boundaries.json');
+            geoText = readFileSync(embeddedPath, 'utf-8');
+            // Save to cache for next startup
+            try {
+                if (!existsSync(dataDir)) {
+                    mkdirSync(dataDir, { recursive: true });
+                }
+                writeFileSync(cachePath, geoText, 'utf-8');
+                console.error('[Geospatial] Cached SA2 boundaries for next startup');
+            }
+            catch (cacheWriteError) {
+                console.error('[Geospatial] Warning: Could not write cache:', cacheWriteError instanceof Error ? cacheWriteError.message : String(cacheWriteError));
+                // Continue anyway - cache write failure is not critical
+            }
+        }
         geoFeatures = JSON.parse(geoText);
         geoBoundariesInitialized = true;
         console.error(`[Geospatial] ✓ Loaded ${geoFeatures?.features.length || 0} SA2 boundaries`);
     }
     catch (error) {
-        geoBoundariesError = `Failed to load geospatial boundaries: ${error instanceof Error ? error.message : String(error)}`;
+        geoBoundariesError = `Failed to initialize geospatial boundaries: ${error instanceof Error ? error.message : String(error)}`;
         console.error(`[Geospatial] ERROR: ${geoBoundariesError}`);
         console.error('[Geospatial] Reverse geocoding (lat/long → SA2) will not be available.');
     }
