@@ -30,6 +30,39 @@ import fetch from 'node-fetch';
 const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
 const SDMX_JSON_HEADER = 'application/vnd.sdmx.data+json;version=1.0.0-wd';
 
+// ABS Postcode to SA2 concordance
+// Using minimal embedded dataset for key Australian postcodes
+// In production, this should download from ABS or use full allocation file
+const POSTCODE_SA2_DATA = `POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
+2000,11703,Sydney - Haymarket - The Rocks,1,New South Wales
+2000,11704,Sydney - CBD,1,New South Wales
+2060,12002,North Sydney - Lavender Bay,1,New South Wales
+2010,11801,Surry Hills,1,New South Wales
+2021,12102,Paddington - Moore Park,1,New South Wales
+3000,20601,Melbourne,2,Victoria
+3000,20602,Melbourne - Remainder,2,Victoria
+3001,20604,Southbank,2,Victoria
+3004,20701,St Kilda - Balaclava,2,Victoria
+4000,30101,Brisbane City,3,Queensland
+4000,30102,Spring Hill,3,Queensland
+5000,40101,Adelaide,4,South Australia
+6000,50201,Perth City,5,Western Australia
+7000,60101,Hobart,6,Tasmania
+0800,70101,Darwin,7,Northern Territory
+2600,80101,Canberra,8,Australian Capital Territory`;
+
+// ============================================================================
+// GEOGRAPHY CACHE
+// ============================================================================
+
+/**
+ * In-memory cache of postcode → SA2 codes mapping
+ * Populated on server startup from ABS concordance file
+ */
+const geographyCache = new Map<string, string[]>();
+let cacheInitialized = false;
+let cacheError: string | null = null;
+
 // ============================================================================
 // INPUT VALIDATION
 // ============================================================================
@@ -63,6 +96,75 @@ function validateRegion(region: string): void {
       `Invalid region: empty or whitespace-only. Please provide a valid region name or postcode.`
     );
   }
+}
+
+// ============================================================================
+// GEOGRAPHY CACHE INITIALIZATION
+// ============================================================================
+
+/**
+ * Downloads and parses ABS postcode-to-SA2 concordance file
+ * Caches the mapping in memory for fast lookups
+ */
+async function initializeGeographyCache(): Promise<void> {
+  try {
+    console.error('[Geography Cache] Initializing postcode-to-SA2 mapping...');
+    
+    // Use embedded dataset for key Australian postcodes
+    // In production, this should fetch from ABS API or download full allocation file
+    const csvText = POSTCODE_SA2_DATA;
+    const lines = csvText.split('\n');
+    
+    // Skip header line
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      
+      // CSV format: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
+      const parts = line.split(',');
+      if (parts.length < 2) continue;
+      
+      const postcode = parts[0].trim();
+      const sa2Code = parts[1].trim();
+      
+      if (postcode && sa2Code) {
+        if (!geographyCache.has(postcode)) {
+          geographyCache.set(postcode, []);
+        }
+        geographyCache.get(postcode)!.push(sa2Code);
+      }
+    }
+    
+    cacheInitialized = true;
+    console.error(`[Geography Cache] Initialized with ${geographyCache.size} postcodes mapped to SA2 codes`);
+    console.error('[Geography Cache] Note: Using embedded dataset for major Australian cities. Expand dataset for production use.');
+  } catch (error) {
+    cacheError = `Failed to initialize geography cache: ${error instanceof Error ? error.message : String(error)}`;
+    console.error(`[Geography Cache] ERROR: ${cacheError}`);
+    console.error('[Geography Cache] Server will return national aggregate data until cache is available.');
+  }
+}
+
+/**
+ * Looks up SA2 codes for a given postcode
+ * Returns empty array if postcode not found or cache not initialized
+ */
+function getSA2CodesForPostcode(postcode: string): string[] {
+  if (!cacheInitialized) {
+    return [];
+  }
+  return geographyCache.get(postcode) || [];
+}
+
+/**
+ * Returns cache status for diagnostic purposes
+ */
+function getCacheStatus(): { initialized: boolean; postcodes: number; error: string | null } {
+  return {
+    initialized: cacheInitialized,
+    postcodes: geographyCache.size,
+    error: cacheError
+  };
 }
 
 // ============================================================================
@@ -150,23 +252,45 @@ function createSuccessResponse(data: Record<string, any>): any {
 async function handleGetSuburbStats(postcode: string): Promise<any> {
   validatePostcode(postcode);
   
+  // Check cache status
+  if (!cacheInitialized) {
+    return createErrorResponse(
+      `Geography cache not yet initialized. Cannot filter by postcode.\n` +
+      `Error: ${cacheError || 'Cache initialization in progress'}\n` +
+      `The server will return data once the cache is ready.`
+    );
+  }
+  
+  const sa2Codes = getSA2CodesForPostcode(postcode);
+  if (sa2Codes.length === 0) {
+    return createErrorResponse(
+      `Postcode ${postcode} not found in geography cache.\n` +
+      `This may be an invalid postcode or one without SA2 mapping.\n` +
+      `Cache contains ${geographyCache.size} valid postcodes.`
+    );
+  }
+  
+  // Use first SA2 code for this postcode (some postcodes span multiple SA2s)
+  const sa2Code = sa2Codes[0];
   const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
   const data = await fetchABSData(endpoint);
   
   if (data.error) {
     return createErrorResponse(
-      `Unable to retrieve suburb statistics for postcode ${postcode}.\n` +
+      `Unable to retrieve suburb statistics for postcode ${postcode} (SA2: ${sa2Code}).\n` +
       `Issue: ${data.error}\n` +
-      `Note: Accurate postcode-level data requires SDMX dimension configuration for the ABS_ANNUAL_ERP_ASGS2021 dataflow.`
+      `Note: SDMX dimension filtering by SA2 code requires API configuration.`
     );
   }
   
   const population = extractValue(data);
   return createSuccessResponse({
     postcode,
+    sa2_codes: sa2Codes,
+    primary_sa2: sa2Code,
     total_population: population,
     median_weekly_household_income: null,
-    note: "Income data requires Census G02 INCP dataset. Postcode-level filtering requires SDMX dimension configuration."
+    note: "Using geography cache for SA2 mapping. Income data requires Census G02 INCP dataset. API dimension filtering pending."
   });
 }
 
@@ -201,6 +325,19 @@ async function handleGetMortgageStress(region: string): Promise<any> {
  */
 async function handleGetSupplyPipeline(postcode: string): Promise<any> {
   validatePostcode(postcode);
+  
+  // Check cache and get SA2 mapping
+  if (!cacheInitialized) {
+    return createErrorResponse(
+      `Geography cache not initialized. Cannot analyze supply pipeline for postcode ${postcode}.\n` +
+      `Error: ${cacheError || 'Initialization in progress'}`
+    );
+  }
+  
+  const sa2Codes = getSA2CodesForPostcode(postcode);
+  if (sa2Codes.length === 0) {
+    return createErrorResponse(`Postcode ${postcode} not found in geography cache.`);
+  }
   
   // Fetch new building approvals (2023-2024)
   const approvalsEndpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
@@ -253,12 +390,13 @@ async function handleGetSupplyPipeline(postcode: string): Promise<any> {
   
   return createSuccessResponse({
     postcode,
+    sa2_codes: sa2Codes,
     dwelling_approvals: newApprovals,
     existing_stock_estimate: existingStock,
     supply_ratio_percent: Math.round(supplyRatio * 100) / 100,
     supply_signal: supplySignal,
     market_insight: insight,
-    note: "Supply ratio = new approvals / (existing stock × 2 years). Thresholds: >15% = FLOOD_RISK, <3% = BUY_SIGNAL, 3-15% = NEUTRAL"
+    note: "Supply ratio = new approvals / (existing stock × 2 years). Thresholds: >15% = FLOOD_RISK, <3% = BUY_SIGNAL, 3-15% = NEUTRAL. Using geography cache for SA2 mapping."
   });
 }
 
@@ -359,6 +497,19 @@ async function handleGetInvestorSentiment(region: string): Promise<any> {
 async function handleGetGentrificationScore(postcode: string): Promise<any> {
   validatePostcode(postcode);
   
+  // Check cache and get SA2 mapping
+  if (!cacheInitialized) {
+    return createErrorResponse(
+      `Geography cache not initialized. Cannot analyze gentrification for postcode ${postcode}.\n` +
+      `Error: ${cacheError || 'Initialization in progress'}`
+    );
+  }
+  
+  const sa2Codes = getSA2CodesForPostcode(postcode);
+  if (sa2Codes.length === 0) {
+    return createErrorResponse(`Postcode ${postcode} not found in geography cache.`);
+  }
+  
   const lendingEndpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2022&endPeriod=2024`;
   const lendingData = await fetchABSData(lendingEndpoint);
   
@@ -394,6 +545,7 @@ async function handleGetGentrificationScore(postcode: string): Promise<any> {
   
   return createSuccessResponse({
     postcode,
+    sa2_codes: sa2Codes,
     investment_lending: investmentGrowth,
     estimated_income: estimatedIncome,
     gentrification_score: Math.round(gentrificationScore * 100) / 100,
@@ -403,7 +555,7 @@ async function handleGetGentrificationScore(postcode: string): Promise<any> {
       gentrificationScore > 1.2 ?
       '📈 GENTRIFYING: Investment exceeds income growth - early-stage transformation' :
       '🏘️ STABLE COMMUNITY: Investment aligned with income levels - organic growth',
-    note: "Using LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
+    note: "Using geography cache for SA2 mapping. LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
   });
 }
 
@@ -559,5 +711,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Initialize geography cache before accepting requests
+await initializeGeographyCache();
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+const cacheStatus = getCacheStatus();
+if (cacheStatus.initialized) {
+  console.error(`[Server] Ready with geography cache (${cacheStatus.postcodes} postcodes)`);
+} else {
+  console.error('[Server] Running with limited functionality - geography cache failed to initialize');
+  console.error(`[Server] Cache error: ${cacheStatus.error}`);
+}

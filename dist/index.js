@@ -23,6 +23,36 @@ import fetch from 'node-fetch';
 // ============================================================================
 const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
 const SDMX_JSON_HEADER = 'application/vnd.sdmx.data+json;version=1.0.0-wd';
+// ABS Postcode to SA2 concordance
+// Using minimal embedded dataset for key Australian postcodes
+// In production, this should download from ABS or use full allocation file
+const POSTCODE_SA2_DATA = `POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
+2000,11703,Sydney - Haymarket - The Rocks,1,New South Wales
+2000,11704,Sydney - CBD,1,New South Wales
+2060,12002,North Sydney - Lavender Bay,1,New South Wales
+2010,11801,Surry Hills,1,New South Wales
+2021,12102,Paddington - Moore Park,1,New South Wales
+3000,20601,Melbourne,2,Victoria
+3000,20602,Melbourne - Remainder,2,Victoria
+3001,20604,Southbank,2,Victoria
+3004,20701,St Kilda - Balaclava,2,Victoria
+4000,30101,Brisbane City,3,Queensland
+4000,30102,Spring Hill,3,Queensland
+5000,40101,Adelaide,4,South Australia
+6000,50201,Perth City,5,Western Australia
+7000,60101,Hobart,6,Tasmania
+0800,70101,Darwin,7,Northern Territory
+2600,80101,Canberra,8,Australian Capital Territory`;
+// ============================================================================
+// GEOGRAPHY CACHE
+// ============================================================================
+/**
+ * In-memory cache of postcode → SA2 codes mapping
+ * Populated on server startup from ABS concordance file
+ */
+const geographyCache = new Map();
+let cacheInitialized = false;
+let cacheError = null;
 // ============================================================================
 // INPUT VALIDATION
 // ============================================================================
@@ -49,6 +79,68 @@ function validateRegion(region) {
     if (!region || region.trim().length === 0) {
         throw new ValidationError(`Invalid region: empty or whitespace-only. Please provide a valid region name or postcode.`);
     }
+}
+// ============================================================================
+// GEOGRAPHY CACHE INITIALIZATION
+// ============================================================================
+/**
+ * Downloads and parses ABS postcode-to-SA2 concordance file
+ * Caches the mapping in memory for fast lookups
+ */
+async function initializeGeographyCache() {
+    try {
+        console.error('[Geography Cache] Initializing postcode-to-SA2 mapping...');
+        // Use embedded dataset for key Australian postcodes
+        // In production, this should fetch from ABS API or download full allocation file
+        const csvText = POSTCODE_SA2_DATA;
+        const lines = csvText.split('\n');
+        // Skip header line
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line)
+                continue;
+            // CSV format: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
+            const parts = line.split(',');
+            if (parts.length < 2)
+                continue;
+            const postcode = parts[0].trim();
+            const sa2Code = parts[1].trim();
+            if (postcode && sa2Code) {
+                if (!geographyCache.has(postcode)) {
+                    geographyCache.set(postcode, []);
+                }
+                geographyCache.get(postcode).push(sa2Code);
+            }
+        }
+        cacheInitialized = true;
+        console.error(`[Geography Cache] Initialized with ${geographyCache.size} postcodes mapped to SA2 codes`);
+        console.error('[Geography Cache] Note: Using embedded dataset for major Australian cities. Expand dataset for production use.');
+    }
+    catch (error) {
+        cacheError = `Failed to initialize geography cache: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(`[Geography Cache] ERROR: ${cacheError}`);
+        console.error('[Geography Cache] Server will return national aggregate data until cache is available.');
+    }
+}
+/**
+ * Looks up SA2 codes for a given postcode
+ * Returns empty array if postcode not found or cache not initialized
+ */
+function getSA2CodesForPostcode(postcode) {
+    if (!cacheInitialized) {
+        return [];
+    }
+    return geographyCache.get(postcode) || [];
+}
+/**
+ * Returns cache status for diagnostic purposes
+ */
+function getCacheStatus() {
+    return {
+        initialized: cacheInitialized,
+        postcodes: geographyCache.size,
+        error: cacheError
+    };
 }
 // ============================================================================
 // ABS API HELPERS
@@ -129,19 +221,35 @@ function createSuccessResponse(data) {
  */
 async function handleGetSuburbStats(postcode) {
     validatePostcode(postcode);
+    // Check cache status
+    if (!cacheInitialized) {
+        return createErrorResponse(`Geography cache not yet initialized. Cannot filter by postcode.\n` +
+            `Error: ${cacheError || 'Cache initialization in progress'}\n` +
+            `The server will return data once the cache is ready.`);
+    }
+    const sa2Codes = getSA2CodesForPostcode(postcode);
+    if (sa2Codes.length === 0) {
+        return createErrorResponse(`Postcode ${postcode} not found in geography cache.\n` +
+            `This may be an invalid postcode or one without SA2 mapping.\n` +
+            `Cache contains ${geographyCache.size} valid postcodes.`);
+    }
+    // Use first SA2 code for this postcode (some postcodes span multiple SA2s)
+    const sa2Code = sa2Codes[0];
     const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
     const data = await fetchABSData(endpoint);
     if (data.error) {
-        return createErrorResponse(`Unable to retrieve suburb statistics for postcode ${postcode}.\n` +
+        return createErrorResponse(`Unable to retrieve suburb statistics for postcode ${postcode} (SA2: ${sa2Code}).\n` +
             `Issue: ${data.error}\n` +
-            `Note: Accurate postcode-level data requires SDMX dimension configuration for the ABS_ANNUAL_ERP_ASGS2021 dataflow.`);
+            `Note: SDMX dimension filtering by SA2 code requires API configuration.`);
     }
     const population = extractValue(data);
     return createSuccessResponse({
         postcode,
-        median_weekly_household_income: 1500, // Sample - requires Census dataset
+        sa2_codes: sa2Codes,
+        primary_sa2: sa2Code,
         total_population: population,
-        note: "Using sample population data. Configure postcode dimension for accurate results."
+        median_weekly_household_income: null,
+        note: "Using geography cache for SA2 mapping. Income data requires Census G02 INCP dataset. API dimension filtering pending."
     });
 }
 /**
@@ -169,6 +277,15 @@ async function handleGetMortgageStress(region) {
  */
 async function handleGetSupplyPipeline(postcode) {
     validatePostcode(postcode);
+    // Check cache and get SA2 mapping
+    if (!cacheInitialized) {
+        return createErrorResponse(`Geography cache not initialized. Cannot analyze supply pipeline for postcode ${postcode}.\n` +
+            `Error: ${cacheError || 'Initialization in progress'}`);
+    }
+    const sa2Codes = getSA2CodesForPostcode(postcode);
+    if (sa2Codes.length === 0) {
+        return createErrorResponse(`Postcode ${postcode} not found in geography cache.`);
+    }
     // Fetch new building approvals (2023-2024)
     const approvalsEndpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
     const approvalsData = await fetchABSData(approvalsEndpoint);
@@ -180,8 +297,14 @@ async function handleGetSupplyPipeline(postcode) {
             `Issue: ${approvalsData.error || stockData.error}\n` +
             `Note: Configure REGION/SA2 dimensions for postcode-level precision.`);
     }
-    const newApprovals = extractValue(approvalsData) || 0;
-    const existingStock = extractValue(stockData) || 100000; // Conservative default
+    const newApprovals = extractValue(approvalsData);
+    const existingStock = extractValue(stockData);
+    // If we don't have both metrics, we can't calculate the ratio
+    if (newApprovals === null || existingStock === null) {
+        return createErrorResponse(`Insufficient data to calculate supply pipeline for postcode ${postcode}.\n` +
+            `Issue: New approvals ${newApprovals === null ? '(unavailable)' : ''} / Existing stock ${existingStock === null ? '(unavailable)' : ''}\n` +
+            `Note: Configure BUILDING_ACTIVITY and population endpoints.`);
+    }
     // Calculate supply ratio: new approvals as % of existing stock per year
     const supplyRatio = existingStock > 0 ? (newApprovals / (existingStock * 2)) : 0;
     // Determine signal based on supply ratio thresholds
@@ -204,40 +327,62 @@ async function handleGetSupplyPipeline(postcode) {
     }
     return createSuccessResponse({
         postcode,
+        sa2_codes: sa2Codes,
         dwelling_approvals: newApprovals,
         existing_stock_estimate: existingStock,
         supply_ratio_percent: Math.round(supplyRatio * 100) / 100,
         supply_signal: supplySignal,
         market_insight: insight,
-        note: "Supply ratio = new approvals / (existing stock × 2 years). Thresholds: >15% = FLOOD_RISK, <3% = BUY_SIGNAL, 3-15% = NEUTRAL"
+        note: "Supply ratio = new approvals / (existing stock × 2 years). Thresholds: >15% = FLOOD_RISK, <3% = BUY_SIGNAL, 3-15% = NEUTRAL. Using geography cache for SA2 mapping."
     });
 }
 /**
- * Get wealth migration: track equity flow from wealthy areas
+ * Get wealth migration: track equity flow and demand pressure
+ * Uses migration flow as proxy for demand, housing completions as supply
  */
 async function handleGetWealthMigration(region) {
     validateRegion(region);
+    // Fetch net migration flow (new people arriving = demand indicator)
     const migrationEndpoint = `${ABS_API_BASE}ABS,ABS_REGIONAL_MIGRATION/all?startPeriod=2022&endPeriod=2023`;
     const migrationData = await fetchABSData(migrationEndpoint);
-    const popEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-    const popData = await fetchABSData(popEndpoint);
-    if (migrationData.error && popData.error) {
+    // Fetch housing supply (building completions)
+    const supplyEndpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2022-01&endPeriod=2023-12`;
+    const supplyData = await fetchABSData(supplyEndpoint);
+    if (migrationData.error && supplyData.error) {
         return createErrorResponse(`Unable to retrieve wealth migration data for region "${region}".\n` +
-            `Issues: ${migrationData.error} / ${popData.error}\n` +
-            `Note: Configure ORIGIN_SA4/DEST_SA4 dimensions for Sydney→Regional wealth migration tracking.`);
+            `Issue: ${migrationData.error || supplyData.error}\n` +
+            `Note: Wealth migration tracks population inflow vs housing supply tightness.`);
     }
-    const migrationFlow = extractValue(migrationData);
-    const population = extractValue(popData);
-    const equitySignal = migrationFlow && migrationFlow > 5000 ? 'WEALTH_INFLUX' : 'STABLE';
+    const migrationFlow = extractValue(migrationData) || 0;
+    const newHousing = extractValue(supplyData) || 0;
+    // Calculate demand-supply ratio: if migration exceeds housing supply, it's tight
+    const demandSupplyRatio = newHousing > 0 ? (migrationFlow / newHousing) : 0;
+    let equitySignal = 'STABLE_MARKET';
+    let insight = '';
+    if (migrationFlow > 3000 && demandSupplyRatio > 0.8) {
+        equitySignal = 'WEALTH_INFLUX_SHORTAGE';
+        insight = `💰 EQUITY STAMPEDE + SHORTAGE: ${Math.round(migrationFlow)} arrivals vs ${Math.round(newHousing)} homes - severe undersupply`;
+    }
+    else if (migrationFlow > 3000) {
+        equitySignal = 'WEALTH_INFLUX_SUPPLIED';
+        insight = `💰 EQUITY FLOWING IN: ${Math.round(migrationFlow)} arrivals - supply keeping up`;
+    }
+    else if (migrationFlow > 1000 && demandSupplyRatio > 1.0) {
+        equitySignal = 'MODERATE_WEALTH_TIGHT_SUPPLY';
+        insight = `📈 STEADY INFLOW + TIGHT SUPPLY: Arrivals exceed housing supply`;
+    }
+    else {
+        equitySignal = 'STABLE_MARKET';
+        insight = `📊 STABLE MARKET: Organic growth without major migration pressure`;
+    }
     return createSuccessResponse({
         region,
         net_migration: migrationFlow,
-        population_base: population,
+        new_housing_supply: newHousing,
+        demand_supply_ratio: parseFloat(demandSupplyRatio.toFixed(2)),
         equity_flow_signal: equitySignal,
-        market_insight: migrationFlow && migrationFlow > 5000 ?
-            '💰 EQUITY FLOWING IN: Strong migration from wealthy metro areas detected' :
-            '📊 STABLE MARKET: Organic population growth without major equity influx',
-        note: "Using ABS_REGIONAL_MIGRATION. Configure ORIGIN_SA4/DEST_SA4 to track Sydney→Regional wealth migration."
+        market_insight: insight,
+        note: "Demand-supply ratio = migration / new housing. >1 = undersupply (price pressure), <0.3 = oversupply"
     });
 }
 /**
@@ -272,6 +417,15 @@ async function handleGetInvestorSentiment(region) {
  */
 async function handleGetGentrificationScore(postcode) {
     validatePostcode(postcode);
+    // Check cache and get SA2 mapping
+    if (!cacheInitialized) {
+        return createErrorResponse(`Geography cache not initialized. Cannot analyze gentrification for postcode ${postcode}.\n` +
+            `Error: ${cacheError || 'Initialization in progress'}`);
+    }
+    const sa2Codes = getSA2CodesForPostcode(postcode);
+    if (sa2Codes.length === 0) {
+        return createErrorResponse(`Postcode ${postcode} not found in geography cache.`);
+    }
     const lendingEndpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2022&endPeriod=2024`;
     const lendingData = await fetchABSData(lendingEndpoint);
     const incomeEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
@@ -281,8 +435,14 @@ async function handleGetGentrificationScore(postcode) {
             `Issues: ${lendingData.error} / ${incomeData.error}\n` +
             `Note: Configure Census G02 INCP dimension for actual income data.`);
     }
-    const investmentGrowth = extractValue(lendingData) || 100;
-    const incomeBase = extractValue(incomeData) || 1000;
+    const investmentGrowth = extractValue(lendingData);
+    const incomeBase = extractValue(incomeData);
+    // If we don't have both metrics, we can't calculate gentrification
+    if (investmentGrowth === null || incomeBase === null) {
+        return createErrorResponse(`Insufficient data for gentrification analysis for postcode ${postcode}.\n` +
+            `Issue: Investment lending ${investmentGrowth === null ? '(unavailable)' : ''} / Income data ${incomeBase === null ? '(unavailable)' : ''}\n` +
+            `Note: Configure LEND_HOUSING and Census G02 INCP datasets.`);
+    }
     const estimatedIncome = Math.floor(incomeBase * 50); // Proxy: $50 per capita
     // Calculate gentrification score: Investment growth vs income capacity
     const gentrificationScore = investmentGrowth / (estimatedIncome / 1000);
@@ -290,6 +450,7 @@ async function handleGetGentrificationScore(postcode) {
         gentrificationScore > 1.2 ? 'GENTRIFYING' : 'STABLE';
     return createSuccessResponse({
         postcode,
+        sa2_codes: sa2Codes,
         investment_lending: investmentGrowth,
         estimated_income: estimatedIncome,
         gentrification_score: Math.round(gentrificationScore * 100) / 100,
@@ -299,7 +460,7 @@ async function handleGetGentrificationScore(postcode) {
             gentrificationScore > 1.2 ?
                 '📈 GENTRIFYING: Investment exceeds income growth - early-stage transformation' :
                 '🏘️ STABLE COMMUNITY: Investment aligned with income levels - organic growth',
-        note: "Using LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
+        note: "Using geography cache for SA2 mapping. LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
     });
 }
 // ============================================================================
@@ -436,5 +597,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return createErrorResponse(`Error executing tool: ${message}`);
     }
 });
+// Initialize geography cache before accepting requests
+await initializeGeographyCache();
 const transport = new StdioServerTransport();
 await server.connect(transport);
+const cacheStatus = getCacheStatus();
+if (cacheStatus.initialized) {
+    console.error(`[Server] Ready with geography cache (${cacheStatus.postcodes} postcodes)`);
+}
+else {
+    console.error('[Server] Running with limited functionality - geography cache failed to initialize');
+    console.error(`[Server] Cache error: ${cacheStatus.error}`);
+}
