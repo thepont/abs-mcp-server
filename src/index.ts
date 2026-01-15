@@ -164,9 +164,9 @@ async function handleGetSuburbStats(postcode: string): Promise<any> {
   const population = extractValue(data);
   return createSuccessResponse({
     postcode,
-    median_weekly_household_income: 1500, // Sample - requires Census dataset
     total_population: population,
-    note: "Using sample population data. Configure postcode dimension for accurate results."
+    median_weekly_household_income: null,
+    note: "Income data requires Census G02 INCP dataset. Postcode-level filtering requires SDMX dimension configuration."
   });
 }
 
@@ -218,8 +218,17 @@ async function handleGetSupplyPipeline(postcode: string): Promise<any> {
     );
   }
   
-  const newApprovals = extractValue(approvalsData) || 0;
-  const existingStock = extractValue(stockData) || 100000; // Conservative default
+  const newApprovals = extractValue(approvalsData);
+  const existingStock = extractValue(stockData);
+  
+  // If we don't have both metrics, we can't calculate the ratio
+  if (newApprovals === null || existingStock === null) {
+    return createErrorResponse(
+      `Insufficient data to calculate supply pipeline for postcode ${postcode}.\n` +
+      `Issue: New approvals ${newApprovals === null ? '(unavailable)' : ''} / Existing stock ${existingStock === null ? '(unavailable)' : ''}\n` +
+      `Note: Configure BUILDING_ACTIVITY and population endpoints.`
+    );
+  }
   
   // Calculate supply ratio: new approvals as % of existing stock per year
   const supplyRatio = existingStock > 0 ? (newApprovals / (existingStock * 2)) : 0;
@@ -277,10 +286,10 @@ async function handleGetWealthMigration(region: string): Promise<any> {
   }
   
   const migrationFlow = extractValue(migrationData) || 0;
-  const newHousing = extractValue(supplyData) || 1000;
+  const newHousing = extractValue(supplyData) || 0;
   
   // Calculate demand-supply ratio: if migration exceeds housing supply, it's tight
-  const demandSupplyRatio = newHousing > 0 ? (migrationFlow / newHousing) : 1;
+  const demandSupplyRatio = newHousing > 0 ? (migrationFlow / newHousing) : 0;
   
   let equitySignal = 'STABLE_MARKET';
   let insight = '';
@@ -364,8 +373,18 @@ async function handleGetGentrificationScore(postcode: string): Promise<any> {
     );
   }
   
-  const investmentGrowth = extractValue(lendingData) || 100;
-  const incomeBase = extractValue(incomeData) || 1000;
+  const investmentGrowth = extractValue(lendingData);
+  const incomeBase = extractValue(incomeData);
+  
+  // If we don't have both metrics, we can't calculate gentrification
+  if (investmentGrowth === null || incomeBase === null) {
+    return createErrorResponse(
+      `Insufficient data for gentrification analysis for postcode ${postcode}.\n` +
+      `Issue: Investment lending ${investmentGrowth === null ? '(unavailable)' : ''} / Income data ${incomeBase === null ? '(unavailable)' : ''}\n` +
+      `Note: Configure LEND_HOUSING and Census G02 INCP datasets.`
+    );
+  }
+  
   const estimatedIncome = Math.floor(incomeBase * 50); // Proxy: $50 per capita
   
   // Calculate gentrification score: Investment growth vs income capacity
