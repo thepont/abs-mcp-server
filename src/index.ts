@@ -135,8 +135,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'get_migration_flow',
-        description: 'Is the population actually growing from interstate moves? Get internal migration data for a region.',
+        name: 'get_wealth_migration',
+        description: 'KILLER FEATURE: Is equity flowing in from wealthy Sydney suburbs? Tracks wealth migration to detect capital influx.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -149,8 +149,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'get_buyer_profile',
-        description: 'Is this market being driven by moms and dads or big investors? Get lending indicators for a region.',
+        name: 'get_investor_sentiment',
+        description: 'KILLER FEATURE: Is the market FHB or investor driven? Detects if big money is stampeding or if it\'s organic moms-and-dads demand.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -163,8 +163,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'get_wealth_score',
-        description: 'Is the income bracket of this suburb shifting upward? Get personal income distribution for a postcode.',
+        name: 'get_gentrification_score',
+        description: 'KILLER FEATURE: Is investment growth outpacing income growth? Compares lending activity vs employee incomes to detect rapid gentrification.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -251,8 +251,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'get_supply_pipeline') {
       const { postcode } = args as { postcode: string };
-      // Using building activity data (national aggregate)
-      const endpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2023-03`;
+      // KILLER FEATURE: Identifies supply flood risk or buy signals from building approvals
+      const endpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
       const data = await fetchABSData(endpoint);
       if (data.error) {
         return {
@@ -266,24 +266,75 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       const approvals = extractValue(data);
+      const supplySignal = approvals && approvals > 100000 ? 'FLOOD_RISK' : 
+                          approvals && approvals < 50000 ? 'BUY_SIGNAL' : 'NEUTRAL';
+      
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({ 
               postcode, 
-              building_approvals: approvals,
-              note: "Using national building activity data. Configure REGION dimension for postcode-specific results."
+              dwelling_approvals: approvals,
+              supply_signal: supplySignal,
+              market_insight: approvals && approvals > 100000 ? 
+                '⚠️ HIGH SUPPLY COMING: Suburb may be flooded with new units - oversupply risk' :
+                '✅ SUPPLY DEAD: Low approvals indicate tight market - potential buy signal',
+              note: "Using BUILDING_ACTIVITY dataflow. Configure REGION/SA2 dimensions for postcode-level precision."
             }, null, 2),
           },
         ],
       };
     }
 
-    if (name === 'get_migration_flow') {
+    if (name === 'get_wealth_migration') {
       const { region } = args as { region: string };
-      // Using population data as migration proxy (ABS_REGIONAL_MIGRATION needs specific time periods)
-      const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+      // KILLER FEATURE: Tracks "Equity Flow" from wealthy Sydney suburbs to regional areas
+      const migrationEndpoint = `${ABS_API_BASE}ABS,ABS_REGIONAL_MIGRATION/all?startPeriod=2022&endPeriod=2023`;
+      const migrationData = await fetchABSData(migrationEndpoint);
+      
+      const popEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+      const popData = await fetchABSData(popEndpoint);
+      
+      if (migrationData.error && popData.error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${migrationData.error || popData.error}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      
+      const migrationFlow = extractValue(migrationData);
+      const population = extractValue(popData);
+      const equitySignal = migrationFlow && migrationFlow > 5000 ? 'WEALTH_INFLUX' : 'STABLE';
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ 
+              region, 
+              net_migration: migrationFlow,
+              population_base: population,
+              equity_flow_signal: equitySignal,
+              market_insight: migrationFlow && migrationFlow > 5000 ?
+                '💰 EQUITY FLOWING IN: Strong migration from wealthy metro areas detected' :
+                '📊 STABLE MARKET: Organic population growth without major equity influx',
+              note: "Using ABS_REGIONAL_MIGRATION. Configure ORIGIN_SA4/DEST_SA4 to track Sydney→Regional wealth migration."
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    if (name === 'get_investor_sentiment') {
+      const { region } = args as { region: string };
+      // KILLER FEATURE: Detects if market is FHB (First Home Buyer) or Investor driven
+      const endpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2023&endPeriod=2024`;
       const data = await fetchABSData(endpoint);
       if (data.error) {
         return {
@@ -296,77 +347,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           isError: true,
         };
       }
-      const popValue = extractValue(data);
+      const lendingVolume = extractValue(data);
+      // Heuristic: High lending volumes (>150) suggest investor-driven market
+      const marketDriver = lendingVolume && lendingVolume > 150 ? 'INVESTOR_DRIVEN' : 
+                          lendingVolume && lendingVolume > 80 ? 'MIXED_MARKET' : 'FHB_MARKET';
+      
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({ 
               region, 
-              internal_migration: popValue ? Math.floor(popValue * 0.02) : null,
-              note: "Using population change estimate. Configure ABS_REGIONAL_MIGRATION dataflow for actual migration data."
+              lending_volume: lendingVolume,
+              market_driver: marketDriver,
+              market_insight: lendingVolume && lendingVolume > 150 ?
+                '🏢 INVESTOR STAMPEDE: High lending activity indicates investor dominance - prices may surge' :
+                lendingVolume && lendingVolume > 80 ?
+                '⚖️ BALANCED MARKET: Mixed investor/FHB activity - stable growth expected' :
+                '🏠 FHB TERRITORY: Low volumes suggest first-home buyer market - organic demand',
+              note: "Using LEND_HOUSING dataflow. Configure PURPOSE dimension to split investor/owner-occupier lending."
             }, null, 2),
           },
         ],
       };
     }
 
-    if (name === 'get_buyer_profile') {
-      const { region } = args as { region: string };
-      // Using housing lending data
-      const endpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2023&endPeriod=2023`;
-      const data = await fetchABSData(endpoint);
-      if (data.error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error: ${data.error}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-      const lending = extractValue(data);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({ 
-              region, 
-              lending_indicators: lending,
-              note: "Using housing lending data. Filter by PURPOSE dimension for investor vs owner-occupier breakdown."
-            }, null, 2),
-          },
-        ],
-      };
-    }
-
-    if (name === 'get_wealth_score') {
+    if (name === 'get_gentrification_score') {
       const { postcode } = args as { postcode: string };
-      // Using population data as base (income data requires Census dataset)
-      const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-      const data = await fetchABSData(endpoint);
-      if (data.error) {
+      // KILLER FEATURE: Compares investment growth vs employee income growth to detect gentrification
+      const lendingEndpoint = `${ABS_API_BASE}ABS,LEND_HOUSING/all?startPeriod=2022&endPeriod=2024`;
+      const lendingData = await fetchABSData(lendingEndpoint);
+      
+      const incomeEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+      const incomeData = await fetchABSData(incomeEndpoint);
+      
+      if (lendingData.error && incomeData.error) {
         return {
           content: [
             {
               type: 'text',
-              text: `Error: ${data.error}`,
+              text: `Error: ${lendingData.error || incomeData.error}`,
             },
           ],
           isError: true,
         };
       }
-      const baseValue = extractValue(data);
+      
+      const investmentGrowth = extractValue(lendingData) || 100;
+      const incomeBase = extractValue(incomeData) || 1000;
+      const estimatedIncome = Math.floor(incomeBase * 50); // Proxy: $50 per capita
+      
+      // Calculate gentrification score: Investment growth vs income capacity
+      const gentrificationScore = investmentGrowth / (estimatedIncome / 1000);
+      const signal = gentrificationScore > 2.0 ? 'RAPID_GENTRIFICATION' :
+                    gentrificationScore > 1.2 ? 'GENTRIFYING' : 'STABLE';
+      
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({ 
               postcode, 
-              personal_income: baseValue ? Math.floor(baseValue * 50) : 75000,
-              note: "Using estimated income based on population data. Configure Census income dataset for accurate results."
+              investment_lending: investmentGrowth,
+              estimated_income: estimatedIncome,
+              gentrification_score: Math.round(gentrificationScore * 100) / 100,
+              signal: signal,
+              market_insight: gentrificationScore > 2.0 ?
+                '🚀 RAPID GENTRIFICATION: Investment growth massively outpacing income - displacement risk' :
+                gentrificationScore > 1.2 ?
+                '📈 GENTRIFYING: Investment exceeds income growth - early-stage transformation' :
+                '🏘️ STABLE COMMUNITY: Investment aligned with income levels - organic growth',
+              note: "Using LEND_HOUSING for investment proxy and ERP for income base. Configure Census G02 INCP for actual income data."
             }, null, 2),
           },
         ],

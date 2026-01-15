@@ -22,22 +22,22 @@ const TEST_CASES = [
   {
     name: 'get_supply_pipeline',
     args: { postcode: '2000' },
-    expectedKeys: ['postcode', 'building_approvals']
+    expectedKeys: ['postcode', 'dwelling_approvals', 'supply_signal']
   },
   {
-    name: 'get_migration_flow',
+    name: 'get_wealth_migration',
     args: { region: 'Sydney' },
-    expectedKeys: ['region', 'internal_migration']
+    expectedKeys: ['region', 'net_migration', 'equity_flow_signal']
   },
   {
-    name: 'get_buyer_profile',
+    name: 'get_investor_sentiment',
     args: { region: 'Sydney' },
-    expectedKeys: ['region', 'lending_indicators']
+    expectedKeys: ['region', 'lending_volume', 'market_driver']
   },
   {
-    name: 'get_wealth_score',
+    name: 'get_gentrification_score',
     args: { postcode: '3000' },
-    expectedKeys: ['postcode', 'personal_income']
+    expectedKeys: ['postcode', 'gentrification_score', 'signal']
   }
 ];
 
