@@ -197,33 +197,59 @@ async function handleGetMortgageStress(region: string): Promise<any> {
 
 /**
  * Get supply pipeline analysis: identify supply flood risk or buy signals
+ * Analyzes new approvals relative to existing housing stock
  */
 async function handleGetSupplyPipeline(postcode: string): Promise<any> {
   validatePostcode(postcode);
   
-  const endpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
-  const data = await fetchABSData(endpoint);
+  // Fetch new building approvals (2023-2024)
+  const approvalsEndpoint = `${ABS_API_BASE}ABS,BUILDING_ACTIVITY/all?startPeriod=2023-01&endPeriod=2024-12`;
+  const approvalsData = await fetchABSData(approvalsEndpoint);
   
-  if (data.error) {
+  // Fetch existing housing stock (population as proxy for dwellings)
+  const stockEndpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+  const stockData = await fetchABSData(stockEndpoint);
+  
+  if (approvalsData.error && stockData.error) {
     return createErrorResponse(
-      `Unable to retrieve building approvals for postcode ${postcode}.\n` +
-      `Issue: ${data.error}\n` +
+      `Unable to retrieve supply pipeline data for postcode ${postcode}.\n` +
+      `Issue: ${approvalsData.error || stockData.error}\n` +
       `Note: Configure REGION/SA2 dimensions for postcode-level precision.`
     );
   }
   
-  const approvals = extractValue(data);
-  const supplySignal = approvals && approvals > 100000 ? 'FLOOD_RISK' :
-                      approvals && approvals < 50000 ? 'BUY_SIGNAL' : 'NEUTRAL';
+  const newApprovals = extractValue(approvalsData) || 0;
+  const existingStock = extractValue(stockData) || 100000; // Conservative default
+  
+  // Calculate supply ratio: new approvals as % of existing stock per year
+  const supplyRatio = existingStock > 0 ? (newApprovals / (existingStock * 2)) : 0;
+  
+  // Determine signal based on supply ratio thresholds
+  let supplySignal = 'NEUTRAL';
+  let insight = '';
+  
+  if (supplyRatio > 0.15) {
+    // More than 15% annual supply growth relative to existing stock = FLOOD_RISK
+    supplySignal = 'FLOOD_RISK';
+    insight = `⚠️ SUPPLY SURGE: New approvals are ${Math.round(supplyRatio * 100)}% of existing stock per year - oversupply risk`;
+  } else if (supplyRatio < 0.03) {
+    // Less than 3% annual supply growth = BUY_SIGNAL
+    supplySignal = 'BUY_SIGNAL';
+    insight = `✅ TIGHT SUPPLY: Only ${Math.round(supplyRatio * 100)}% new supply relative to existing stock - strong buy signal`;
+  } else {
+    // 3-15% is balanced supply
+    supplySignal = 'NEUTRAL';
+    insight = `⚖️ BALANCED SUPPLY: ${Math.round(supplyRatio * 100)}% annual supply growth - healthy market`;
+  }
   
   return createSuccessResponse({
     postcode,
-    dwelling_approvals: approvals,
+    dwelling_approvals: newApprovals,
+    existing_stock_estimate: existingStock,
+    supply_ratio_percent: Math.round(supplyRatio * 100) / 100,
     supply_signal: supplySignal,
-    market_insight: approvals && approvals > 100000 ?
-      '⚠️ HIGH SUPPLY COMING: Suburb may be flooded with new units - oversupply risk' :
-      '✅ SUPPLY DEAD: Low approvals indicate tight market - potential buy signal',
-    note: "Using BUILDING_ACTIVITY dataflow. Configure REGION/SA2 dimensions for postcode-level precision."
+    market_insight: insight,
+    note: "Supply ratio = new approvals / (existing stock × 2 years). Thresholds: >15% = FLOOD_RISK, <3% = BUY_SIGNAL, 3-15% = NEUTRAL"
   });
 }
 
