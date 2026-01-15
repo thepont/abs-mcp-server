@@ -269,18 +269,39 @@ abs-mcp-server/
 
 ## API Data Sources
 
-The server is designed to query Australian Bureau of Statistics (ABS) API endpoints using SDMX-JSON format. The tools are fully implemented with proper error handling and MCP protocol support.
+The server uses the **ABS Data API** with SDMX (Statistical Data and Metadata Exchange) format following the pattern:
 
-**Note on Endpoints**: The ABS API structure uses specific dataset codes for each indicator. The tools will work once valid ABS dataset identifiers are configured:
+`https://data.api.abs.gov.au/rest/data/{dataflowIdentifier}/{dataKey}`
 
-- **get_suburb_stats**: Requires ABS Census or Income dataset (SDMX-JSON)
-- **get_mortgage_stress**: ABS Household Income and Credit Conditions dataset
-- **get_supply_pipeline**: ABS Building Approvals dataset
-- **get_migration_flow**: ABS Internal Migration dataset
-- **get_buyer_profile**: ABS Lending Indicators dataset
-- **get_wealth_score**: ABS Personal Income Distribution dataset
+**API Documentation**: [OpenAPI Spec](https://raw.githubusercontent.com/apigovau/api-descriptions/master/abs/DataAPI.openapi.yaml)
 
-All tools are fully functional and ready for deployment with proper ABS dataset codes.
+**Available Dataflows** (examples used in tools):
+- `BUILDING_ACTIVITY` - Building approvals and construction data  
+- `ABS_REGIONAL_MIGRATION` - Interstate and regional migration flows
+- `LEND_HOUSING` - Housing finance and lending indicators
+- Census dataflows - Income and population statistics by geography
+
+**Current Implementation Status**:
+
+All 6 tools are fully implemented with:
+- ✅ Proper MCP protocol support (tool discovery and execution)
+- ✅ SDMX-JSON parsing with error handling
+- ✅ Input validation (postcode format, region strings)
+- ⚠️  Placeholder dataflow queries (return 400 - need dimension configuration)
+
+**Next Steps for Production Use**:
+
+To make tools return real data, configure each tool with:
+1. Correct dataflow identifier (e.g., `ABS,BUILDING_ACTIVITY,1.0.0`)
+2. Dimensional filters (dataKey) to match postcode/region to SDMX dimensions
+3. Time period filters (`startPeriod`, `endPeriod`)
+
+Example working query structure:
+```
+https://data.api.abs.gov.au/rest/data/ABS,BUILDING_ACTIVITY/all?startPeriod=2023
+```
+
+All tool implementations follow this pattern and are ready for dimension mapping.
 
 ---
 

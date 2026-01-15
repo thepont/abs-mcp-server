@@ -41,7 +41,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
 
-// Note: ABS API redirects to rest/data/ endpoint
+// ABS Data API base URL (SDMX format: /rest/data/{dataflowIdentifier}/{dataKey})
+// See: https://data.api.abs.gov.au/
 const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
 
 // Helper to fetch SDMX-JSON and handle errors
