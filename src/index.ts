@@ -170,6 +170,7 @@ async function initializeGeographyCache(): Promise<void> {
     }
     
     // Parse CSV: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
+    // Note: SA2_CODE_2021 can contain multiple codes separated by pipe (|) for postcodes spanning multiple SA2s
     const lines = csvText.split('\n');
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -179,13 +180,15 @@ async function initializeGeographyCache(): Promise<void> {
       if (parts.length < 2) continue;
       
       const postcode = parts[0].trim();
-      const sa2Code = parts[1].trim();
+      const sa2Codes = parts[1].trim();
       
-      if (postcode && sa2Code) {
+      if (postcode && sa2Codes) {
         if (!geographyCache.has(postcode)) {
           geographyCache.set(postcode, []);
         }
-        geographyCache.get(postcode)!.push(sa2Code);
+        // Support multiple SA2 codes per postcode, separated by pipe (|)
+        const codesArray = sa2Codes.split('|').map(c => c.trim()).filter(c => c);
+        geographyCache.get(postcode)!.push(...codesArray);
       }
     }
     
@@ -401,6 +404,23 @@ async function fetchABSData(endpoint: string): Promise<any> {
   }
 }
 
+async function fetchPopulationForSA2(sa2Code: string): Promise<number | null> {
+  // Use correct SDMX positional key: MEASURE.REGION_TYPE.REGION.FREQ
+  const endpoint = `${ABS_API_BASE}ABS_ANNUAL_ERP_ASGS2021/ERP.SA2.${sa2Code}.A?startPeriod=2021&endPeriod=2021`;
+  const data = await fetchABSData(endpoint);
+  if (data.error) return null;
+  return extractValue(data);
+}
+
+async function fetchIncomeForSA2(sa2Code: string): Promise<number | null> {
+  // Use correct SDMX positional key: MEDAVG.REGION.REGION_TYPE.STATE
+  // Median total household income is code '4'.
+  const endpoint = `${ABS_API_BASE}C21_G02_SA2/4.${sa2Code}.SA2.?startPeriod=2021&endPeriod=2021`;
+  const data = await fetchABSData(endpoint);
+  if (data.error) return null;
+  return extractValue(data);
+}
+
 /**
  * Extracts the first available numeric value from SDMX response
  */
@@ -475,27 +495,77 @@ async function handleGetSuburbStats(postcode: string): Promise<any> {
     );
   }
   
-  // Use first SA2 code for this postcode (some postcodes span multiple SA2s)
-  const sa2Code = sa2Codes[0];
-  const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
-  const data = await fetchABSData(endpoint);
+  // Query ALL SA2 codes for this postcode and aggregate results
+  const sa2Results = await Promise.all(
+    sa2Codes.map(async (code) => {
+      const [pop, income] = await Promise.all([
+        fetchPopulationForSA2(code),
+        fetchIncomeForSA2(code)
+      ]);
+      return { code, population: pop, income };
+    })
+  );
+
+  // Aggregate data across all SA2 areas
+  let totalPopulation: number | null = null;
+  const incomeValues: number[] = [];
+  const incomeWeightedValues: Array<{ income: number; population: number }> = [];
+  const sa2Details: Array<{code: string; population: number | null; income: number | null}> = [];
   
-  if (data.error) {
-    return createErrorResponse(
-      `Unable to retrieve suburb statistics for postcode ${postcode} (SA2: ${sa2Code}).\n` +
-      `Issue: ${data.error}\n` +
-      `Note: SDMX dimension filtering by SA2 code requires API configuration.`
-    );
+  for (const result of sa2Results) {
+    sa2Details.push({
+      code: result.code,
+      population: result.population,
+      income: result.income
+    });
+    
+    // Sum population across all SA2s
+    if (result.population !== null) {
+      totalPopulation = (totalPopulation || 0) + result.population;
+    }
+    
+    // Collect income values for averaging
+    if (result.income !== null) {
+      incomeValues.push(result.income);
+      if (result.population !== null && result.population > 0) {
+        incomeWeightedValues.push({ income: result.income, population: result.population });
+      }
+    }
   }
   
-  const population = extractValue(data);
+  // Calculate median income across all SA2 areas
+  const medianIncome = incomeValues.length > 0
+    ? incomeValues.sort((a, b) => a - b)[Math.floor(incomeValues.length / 2)]
+    : null;
+
+  // Calculate simple average income across SA2 areas
+  const averageIncome = incomeValues.length > 0
+    ? incomeValues.reduce((sum, v) => sum + v, 0) / incomeValues.length
+    : null;
+
+  // Calculate population-weighted average income (more representative if populations differ)
+  const populationWeightedIncome = incomeWeightedValues.length > 0
+    ? incomeWeightedValues.reduce((sum, v) => sum + v.income * v.population, 0) /
+      incomeWeightedValues.reduce((sum, v) => sum + v.population, 0)
+    : null;
+
+  const noteParts: string[] = [];
+  if (sa2Codes.length > 1) {
+    noteParts.push(`Postcode spans ${sa2Codes.length} SA2 areas - data aggregated.`);
+  }
+  if (totalPopulation === null) noteParts.push('Population unavailable (SA2 ERP filter or data missing).');
+  if (medianIncome === null) noteParts.push('Median income unavailable (Census G02 INCP filter or data missing).');
+
   return createSuccessResponse({
     postcode,
     sa2_codes: sa2Codes,
-    primary_sa2: sa2Code,
-    total_population: population,
-    median_weekly_household_income: null,
-    note: "Using geography cache for SA2 mapping. Income data requires Census G02 INCP dataset. API dimension filtering pending."
+    sa2_count: sa2Codes.length,
+    sa2_details: sa2Details,
+    total_population: totalPopulation,
+    median_weekly_household_income: medianIncome,
+    average_weekly_household_income: averageIncome,
+    population_weighted_weekly_household_income: populationWeightedIncome,
+    note: noteParts.length ? noteParts.join(' ') : 'SA2-scoped ERP and income retrieved successfully.'
   });
 }
 

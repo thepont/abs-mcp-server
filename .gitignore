@@ -1,13 +1,42 @@
+# Node.js
 node_modules/
 dist/
-.env
-.env.local
-*.log
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Environment & Config
+.env
+.env.local
+.env.*.local
+.gemini
+
+# Build & Cache
+.cache/
+.data/
+*.cache
+
+# OS & IDE
 .DS_Store
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
+*~
+.eslintcache
+
+# Test artifacts (these should be generated during test runs)
+erp_data.json
+income_data.json
+c21_g02_poa_structure.json
+
+# Temporary scripts (debugging/research only)
+get_2000_stats.js
+parse_erp.js
+parse_income.js
+solve_task.js
+
+# Temporary verification reports (generated files)
+VERIFICATION_REPORT.md
+verify-fix.sh

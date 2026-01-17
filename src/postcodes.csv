@@ -1,69 +1,70 @@
 POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
-2000,11703,Sydney - CBD,1,New South Wales
-2007,11802,Ultimo - Pyrmont,1,New South Wales
-2010,11801,Surry Hills,1,New South Wales
-2021,12102,Paddington,1,New South Wales
-2060,12002,North Sydney,1,New South Wales
-2110,13101,Parramatta,1,New South Wales
-2150,13301,Parramatta Central,1,New South Wales
-2200,14101,Bankstown,1,New South Wales
-2560,14201,Campbelltown,1,New South Wales
-2750,14301,Penrith,1,New South Wales
-2770,14401,Mount Druitt,1,New South Wales
-2850,14501,Bathurst,1,New South Wales
-3000,20601,Melbourne,2,Victoria
-3001,20604,Southbank,2,Victoria
-3004,20701,St Kilda,2,Victoria
-3011,20801,Footscray,2,Victoria
-3031,20901,Kensington,2,Victoria
-3050,21101,Parkville,2,Victoria
-3065,21301,Fitzroy,2,Victoria
-3081,21501,Heidelberg,2,Victoria
-3108,21701,Doncaster,2,Victoria
-3121,21801,Richmond,2,Victoria
-3141,22001,South Yarra,2,Victoria
-3181,22101,Prahran,2,Victoria
-3191,22201,Brighton,2,Victoria
-3204,22401,Bentleigh,2,Victoria
-3800,22501,Monash,2,Victoria
-4000,30101,Brisbane City,3,Queensland
-4101,30601,West End,3,Queensland
-4111,30701,Sunnybank,3,Queensland
-4169,31001,Kenmore,3,Queensland
-4207,31101,Beenleigh,3,Queensland
-4300,31201,Ipswich,3,Queensland
-4350,31301,Toowoomba,3,Queensland
-4700,31401,Rockhampton,3,Queensland
-4810,31501,Townsville,3,Queensland
-4870,31601,Cairns,3,Queensland
-5000,40101,Adelaide,4,South Australia
-5006,40201,North Adelaide,4,South Australia
-5031,40301,Mile End,4,South Australia
-5061,40401,Unley,4,South Australia
-5081,40501,Prospect,4,South Australia
-5108,40601,Pooraka,4,South Australia
-5158,40701,Morphett Vale,4,South Australia
-6000,50201,Perth City,5,Western Australia
-6014,50301,Innaloo,5,Western Australia
-6050,50401,Mount Lawley,5,Western Australia
-6100,50501,Victoria Park,5,Western Australia
-6147,50601,Welshpool,5,Western Australia
-6210,50701,Mandurah,5,Western Australia
-6230,50801,Bunbury,5,Western Australia
-6280,50901,Busselton,5,Western Australia
-6330,51001,Albany,5,Western Australia
-6430,51101,Kalgoorlie,5,Western Australia
-6530,51201,Geraldton,5,Western Australia
-7000,60101,Hobart,6,Tasmania
-7004,60201,Battery Point,6,Tasmania
-7050,60301,Kingston,6,Tasmania
-7110,60401,Lindisfarne,6,Tasmania
-7248,60801,Launceston,6,Tasmania
-7250,60901,Launceston Central,6,Tasmania
-0800,70101,Darwin,7,Northern Territory
-0810,70201,Parap,7,Northern Territory
-0820,70301,Nightcliff,7,Northern Territory
-0870,70701,Alice Springs,7,Northern Territory
-2600,80101,Canberra,8,Australian Capital Territory
-2602,80103,City,8,Australian Capital Territory
-2900,80201,Queanbeyan,8,Australian Capital Territory
+2000,117031644|117031645,Sydney (North) - Millers Point|Sydney (South) - Haymarket,1,New South Wales
+2007,117031646,Ultimo,1,New South Wales
+2007,117031646,Ultimo,1,New South Wales
+2010,117031336,Surry Hills,1,New South Wales
+2021,118011345,Paddington - Moore Park,1,New South Wales
+2060,121041417,North Sydney - Lavender Bay,1,New South Wales
+2110,125041717,Parramatta - North,1,New South Wales
+2150,125041717,Parramatta - North,1,New South Wales
+2200,119011571,Bankstown - North,1,New South Wales
+2560,123021437,Campbelltown - Woodbine,1,New South Wales
+2750,124031464,Penrith,1,New South Wales
+2770,116031317,Mount Druitt - Whalan,1,New South Wales
+2850,103011059,Bathurst - East,1,New South Wales
+3000,206041119,East Melbourne,2,Victoria
+3001,206041509,Southbank - East,2,Victoria
+3004,206051513,St Kilda - Central,2,Victoria
+3011,213031348,Footscray,2,Victoria
+3031,206041121,Kensington (Vic.),2,Victoria
+3050,206041124,Parkville,2,Victoria
+3065,206071142,Fitzroy,2,Victoria
+3081,206101168,Heidelberg - Rosanna,2,Victoria
+3108,206091156,Doncaster,2,Victoria
+3121,206081154,Richmond - Clarendon,2,Victoria
+3141,206041167,South West Rocks,2,Victoria
+3181,206071153,Prahran - Windsor,2,Victoria
+3191,206101152,Brighton (Vic.),2,Victoria
+3204,206051151,Bentleigh - McKinnon,2,Victoria
+3800,208011175,Monash,2,Victoria
+4000,306011153,Brisbane Port - Lytton,3,Queensland
+4101,306031313,West Wyalong,3,Queensland
+4111,307031306,Sunnybank,3,Queensland
+4169,307021305,Kenmore,3,Queensland
+4207,309981344,Beenleigh,3,Queensland
+4300,310041330,Ipswich - Central,3,Queensland
+4350,310391329,Toowoomba - Central,3,Queensland
+4700,310171327,Rockhampton - West,3,Queensland
+4810,310191328,Townsville - South,3,Queensland
+4870,310141316,Cairns City,3,Queensland
+5000,407051328,Adelaide,4,South Australia
+5006,407011298,North Nowra - Bomaderry,4,South Australia
+5031,407081324,Mile End,4,South Australia
+5061,407061322,Unley - Parkside,4,South Australia
+5081,407011298,Prospect Reservoir,4,South Australia
+5108,407051318,Pooraka - Cavan,4,South Australia
+5158,407121332,Morphett Vale - East,4,South Australia
+6000,406171323,Perth (North) - Highgate,5,Western Australia
+6014,406201331,Innaloo - Doubleview,5,Western Australia
+6050,306011153,Mount Hutton - Windale,5,Western Australia
+6100,307071314,Victoria Point,5,Western Australia
+6147,405111315,Welshpool,5,Western Australia
+6210,405031310,Mandurah,5,Western Australia
+6230,405021309,Bunbury,5,Western Australia
+6280,405111315,Busselton Surrounds,5,Western Australia
+6330,406111300,Albany Creek,5,Western Australia
+6430,405081312,Kalgoorlie,5,Western Australia
+6530,405091311,Geraldton,5,Western Australia
+7000,407011298,Hobart,6,Tasmania
+7004,407011298,North Nowra - Bomaderry,6,Tasmania
+7050,407011298,Kingston (Qld),6,Tasmania
+7110,407011298,Lindisfarne - Rose Bay,6,Tasmania
+7248,407011298,Launceston,6,Tasmania
+7250,407011298,Launceston,6,Tasmania
+0800,407011298,Darwin Airport,7,Northern Territory
+0810,406201331,Parap,7,Northern Territory
+0820,407011298,Nightcliff,7,Northern Territory
+0870,407011298,Alice Springs,7,Northern Territory
+2600,408011297,Canberra East,8,Australian Capital Territory
+2602,306011153,City Beach,8,Australian Capital Territory
+2900,407011298,Queanbeyan,8,Australian Capital Territory
