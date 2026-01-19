@@ -11,29 +11,33 @@ A Model Context Protocol (MCP) server for accessing Australian Bureau of Statist
 
 ## Overview
 
-**abs-mcp-server** provides six tools for Australian socio-economic analysis:
+**abs-mcp-server** provides seven tools for Australian socio-economic analysis:
 
 **Core Demographics:**
-1. **get_suburb_stats** - Get median weekly household income and population for an Australian postcode
-2. **get_mortgage_stress** - Get household debt/mortgage-to-income ratios for a region
+1. **get_location_stats** - Get suburb statistics by latitude/longitude coordinates (finds nearest SA2 region - more precise than postcodes)
+2. **get_suburb_stats** - Get median weekly household income and population for an Australian postcode
+3. **get_mortgage_stress** - Get household debt/mortgage-to-income ratios for a region
 
 **Real Estate Market Analysis:**
-3. **get_supply_pipeline** - Analyze building approvals vs existing stock (supply flood risk or buy signals)
-4. **get_wealth_migration** - Analyze migration inflow vs housing supply (demand/supply dynamics)
-5. **get_investor_sentiment** - Analyze lending patterns (investor-driven vs first-home buyer markets)
-6. **get_gentrification_score** - Compare investment growth vs income levels (gentrification indicators)
+4. **get_supply_pipeline** - Analyze building approvals vs existing stock (supply flood risk or buy signals)
+5. **get_wealth_migration** - Analyze migration inflow vs housing supply (demand/supply dynamics)
+6. **get_investor_sentiment** - Analyze lending patterns (investor-driven vs first-home buyer markets)
+7. **get_gentrification_score** - Compare investment growth vs income levels (gentrification indicators)
 
 ### Geography Cache System
 
 The server implements an intelligent geography cache that:
-- **Loads on startup** - Postcode-to-SA2 mapping initialized before accepting requests
+- **Loads on startup** - SA2 and postcode mappings initialized with coordinates before accepting requests
+- **SA2 location data** - Each SA2 region stored with latitude/longitude coordinates for precise location lookups
 - **Validates postcodes** - Ensures postcode exists in the cache before making API calls
 - **Maps to ABS geography** - Translates postcodes to Statistical Area Level 2 (SA2) codes
-- **Fast lookups** - In-memory cache provides instant postcode validation
+- **Fast lookups** - In-memory cache provides instant postcode and lat/long-based lookups using Haversine distance calculation
 
-**Current Coverage**: 13 major Australian postcodes (capital cities: Sydney, Melbourne, Brisbane, Adelaide, Perth, Hobart, Darwin, Canberra)
+**Current Coverage**: 16 SA2 regions across 13 major Australian postcodes (capital cities: Sydney, Melbourne, Brisbane, Adelaide, Perth, Hobart, Darwin, Canberra)
 
-**For Production**: Expand the embedded dataset in `src/index.ts` to include all ~3000 Australian postcodes, or implement dynamic download from ABS allocation files.
+**Lat/Long Lookup**: The `get_location_stats` tool finds the nearest SA2 region to any coordinate within Australia, providing more precise results than postcode-based lookups.
+
+**For Production**: Expand the embedded dataset in `src/index.ts` to include all ~2,200 SA2 regions and ~3,000 Australian postcodes, or implement dynamic download from ABS allocation files.
 
 The server runs in Docker and is discoverable via Docker MCP, making it seamlessly available to Gemini CLI and other MCP clients.
 
@@ -92,16 +96,45 @@ gemini "List all available MCP tools" --allowed-mcp-server-names abs-mcp-server
 ```
 
 You should see:
+- `get_location_stats` (latitude: number, longitude: number)
 - `get_suburb_stats` (postcode: string)
 - `get_mortgage_stress` (region: string)
 - `get_supply_pipeline` (postcode: string)
-- `get_migration_flow` (region: string)
-- `get_buyer_profile` (region: string)
-- `get_wealth_score` (postcode: string)
+- `get_wealth_migration` (region: string)
+- `get_investor_sentiment` (region: string)
+- `get_gentrification_score` (postcode: string)
 
 ---
 
 ## Available Tools
+
+### get_location_stats
+
+Get suburb statistics for a location specified by latitude and longitude coordinates. Uses the geography cache to find the nearest SA2 (Statistical Area Level 2) region, which provides more granular and precise location data than postcodes.
+
+**Input:**
+```json
+{
+  "latitude": -33.8688,   // Latitude coordinate (-90 to 90)
+  "longitude": 151.2093   // Longitude coordinate (-180 to 180)
+}
+```
+
+**Example Usage:**
+```bash
+gemini "Get statistics for location at latitude -33.8688, longitude 151.2093" --allowed-mcp-server-names abs-mcp-server
+```
+
+**Output includes:**
+- Nearest SA2 region code and name (e.g., "Sydney - Haymarket - The Rocks")
+- Distance from query location in kilometers
+- Associated postcode and state
+- Population data
+- Median household income (when available)
+
+**Why SA2 regions?** SA2 regions are smaller geographical areas than postcodes (typically 3,000-25,000 people), providing more accurate location-based statistics. A single postcode might contain multiple SA2 regions, each with different demographics.
+
+---
 
 ### get_suburb_stats
 
@@ -371,7 +404,10 @@ Ensure you're using a valid 4-digit Australian postcode (e.g., 2000 for Sydney, 
 ## Example Queries
 
 ```bash
-# Get income and population for Sydney CBD
+# Get statistics by latitude/longitude (Sydney CBD)
+gemini "Get statistics for location at latitude -33.8688, longitude 151.2093" --allowed-mcp-server-names abs-mcp-server
+
+# Get income and population for Sydney CBD by postcode
 gemini "Get statistics for postcode 2000" --allowed-mcp-server-names abs-mcp-server
 
 # Get mortgage stress data
@@ -379,6 +415,9 @@ gemini "What is the mortgage stress level for Melbourne?" --allowed-mcp-server-n
 
 # Compare multiple postcodes
 gemini "Compare postcode 2000 and 3000" --allowed-mcp-server-names abs-mcp-server
+
+# Find suburb info from coordinates (Melbourne)
+gemini "What suburb is at -37.8136, 144.9631?" --allowed-mcp-server-names abs-mcp-server
 ```
 
 ---

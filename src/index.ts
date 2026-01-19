@@ -30,26 +30,26 @@ import fetch from 'node-fetch';
 const ABS_API_BASE = 'https://data.api.abs.gov.au/rest/data/';
 const SDMX_JSON_HEADER = 'application/vnd.sdmx.data+json;version=1.0.0-wd';
 
-// ABS Postcode to SA2 concordance
+// ABS Postcode to SA2 concordance with approximate lat/long coordinates
 // Using minimal embedded dataset for key Australian postcodes
 // In production, this should download from ABS or use full allocation file
-const POSTCODE_SA2_DATA = `POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
-2000,11703,Sydney - Haymarket - The Rocks,1,New South Wales
-2000,11704,Sydney - CBD,1,New South Wales
-2060,12002,North Sydney - Lavender Bay,1,New South Wales
-2010,11801,Surry Hills,1,New South Wales
-2021,12102,Paddington - Moore Park,1,New South Wales
-3000,20601,Melbourne,2,Victoria
-3000,20602,Melbourne - Remainder,2,Victoria
-3001,20604,Southbank,2,Victoria
-3004,20701,St Kilda - Balaclava,2,Victoria
-4000,30101,Brisbane City,3,Queensland
-4000,30102,Spring Hill,3,Queensland
-5000,40101,Adelaide,4,South Australia
-6000,50201,Perth City,5,Western Australia
-7000,60101,Hobart,6,Tasmania
-0800,70101,Darwin,7,Northern Territory
-2600,80101,Canberra,8,Australian Capital Territory`;
+const POSTCODE_SA2_DATA = `POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021,LAT,LON
+2000,11703,Sydney - Haymarket - The Rocks,1,New South Wales,-33.8688,151.2093
+2000,11704,Sydney - CBD,1,New South Wales,-33.8688,151.2093
+2060,12002,North Sydney - Lavender Bay,1,New South Wales,-33.8383,151.2065
+2010,11801,Surry Hills,1,New South Wales,-33.8848,151.2108
+2021,12102,Paddington - Moore Park,1,New South Wales,-33.8886,151.2273
+3000,20601,Melbourne,2,Victoria,-37.8136,144.9631
+3000,20602,Melbourne - Remainder,2,Victoria,-37.8136,144.9631
+3001,20604,Southbank,2,Victoria,-37.8253,144.9631
+3004,20701,St Kilda - Balaclava,2,Victoria,-37.8677,144.9944
+4000,30101,Brisbane City,3,Queensland,-27.4705,153.0260
+4000,30102,Spring Hill,3,Queensland,-27.4598,153.0242
+5000,40101,Adelaide,4,South Australia,-34.9285,138.6007
+6000,50201,Perth City,5,Western Australia,-31.9505,115.8605
+7000,60101,Hobart,6,Tasmania,-42.8821,147.3272
+0800,70101,Darwin,7,Northern Territory,-12.4634,130.8456
+2600,80101,Canberra,8,Australian Capital Territory,-35.2809,149.1300`;
 
 // ============================================================================
 // GEOGRAPHY CACHE
@@ -59,7 +59,23 @@ const POSTCODE_SA2_DATA = `POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_
  * In-memory cache of postcode → SA2 codes mapping
  * Populated on server startup from ABS concordance file
  */
-const geographyCache = new Map<string, string[]>();
+interface PostcodeLocation {
+  sa2Codes: string[];
+  lat: number;
+  lon: number;
+}
+
+interface SA2Location {
+  sa2Code: string;
+  sa2Name: string;
+  postcode: string;
+  state: string;
+  lat: number;
+  lon: number;
+}
+
+const geographyCache = new Map<string, PostcodeLocation>();
+const sa2Cache = new Map<string, SA2Location>();
 let cacheInitialized = false;
 let cacheError: string | null = null;
 
@@ -98,6 +114,30 @@ function validateRegion(region: string): void {
   }
 }
 
+/**
+ * Validates latitude coordinate
+ * @throws ValidationError if invalid
+ */
+function validateLatitude(lat: number): void {
+  if (isNaN(lat) || lat < -90 || lat > 90) {
+    throw new ValidationError(
+      `Invalid latitude: ${lat}. Latitude must be between -90 and 90 degrees.`
+    );
+  }
+}
+
+/**
+ * Validates longitude coordinate
+ * @throws ValidationError if invalid
+ */
+function validateLongitude(lon: number): void {
+  if (isNaN(lon) || lon < -180 || lon > 180) {
+    throw new ValidationError(
+      `Invalid longitude: ${lon}. Longitude must be between -180 and 180 degrees.`
+    );
+  }
+}
+
 // ============================================================================
 // GEOGRAPHY CACHE INITIALIZATION
 // ============================================================================
@@ -108,35 +148,50 @@ function validateRegion(region: string): void {
  */
 async function initializeGeographyCache(): Promise<void> {
   try {
-    console.error('[Geography Cache] Initializing postcode-to-SA2 mapping...');
-    
+    console.error('[Geography Cache] Initializing SA2 and postcode mapping with coordinates...');
+
     // Use embedded dataset for key Australian postcodes
     // In production, this should fetch from ABS API or download full allocation file
     const csvText = POSTCODE_SA2_DATA;
     const lines = csvText.split('\n');
-    
+
     // Skip header line
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
-      
-      // CSV format: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021
+
+      // CSV format: POA_CODE_2021,SA2_CODE_2021,SA2_NAME_2021,STATE_CODE_2021,STATE_NAME_2021,LAT,LON
       const parts = line.split(',');
-      if (parts.length < 2) continue;
-      
+      if (parts.length < 7) continue;
+
       const postcode = parts[0].trim();
       const sa2Code = parts[1].trim();
-      
-      if (postcode && sa2Code) {
+      const sa2Name = parts[2].trim();
+      const stateName = parts[4].trim();
+      const lat = parseFloat(parts[5].trim());
+      const lon = parseFloat(parts[6].trim());
+
+      if (postcode && sa2Code && !isNaN(lat) && !isNaN(lon)) {
+        // Populate postcode cache
         if (!geographyCache.has(postcode)) {
-          geographyCache.set(postcode, []);
+          geographyCache.set(postcode, { sa2Codes: [], lat, lon });
         }
-        geographyCache.get(postcode)!.push(sa2Code);
+        geographyCache.get(postcode)!.sa2Codes.push(sa2Code);
+
+        // Populate SA2 cache (each SA2 has its own entry with coordinates)
+        sa2Cache.set(sa2Code, {
+          sa2Code,
+          sa2Name,
+          postcode,
+          state: stateName,
+          lat,
+          lon
+        });
       }
     }
-    
+
     cacheInitialized = true;
-    console.error(`[Geography Cache] Initialized with ${geographyCache.size} postcodes mapped to SA2 codes`);
+    console.error(`[Geography Cache] Initialized with ${sa2Cache.size} SA2 regions and ${geographyCache.size} postcodes`);
     console.error('[Geography Cache] Note: Using embedded dataset for major Australian cities. Expand dataset for production use.');
   } catch (error) {
     cacheError = `Failed to initialize geography cache: ${error instanceof Error ? error.message : String(error)}`;
@@ -153,16 +208,57 @@ function getSA2CodesForPostcode(postcode: string): string[] {
   if (!cacheInitialized) {
     return [];
   }
-  return geographyCache.get(postcode) || [];
+  const location = geographyCache.get(postcode);
+  return location ? location.sa2Codes : [];
+}
+
+/**
+ * Calculate distance between two points using Haversine formula
+ * Returns distance in kilometers
+ */
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Find the nearest SA2 region to given lat/long coordinates
+ * Returns SA2 location info and distance in km, or null if cache not initialized
+ */
+function findNearestSA2(lat: number, lon: number): { sa2: SA2Location; distance: number } | null {
+  if (!cacheInitialized || sa2Cache.size === 0) {
+    return null;
+  }
+
+  let nearestSA2: SA2Location | null = null;
+  let minDistance = Infinity;
+
+  for (const sa2Location of sa2Cache.values()) {
+    const distance = calculateDistance(lat, lon, sa2Location.lat, sa2Location.lon);
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearestSA2 = sa2Location;
+    }
+  }
+
+  return nearestSA2 ? { sa2: nearestSA2, distance: minDistance } : null;
 }
 
 /**
  * Returns cache status for diagnostic purposes
  */
-function getCacheStatus(): { initialized: boolean; postcodes: number; error: string | null } {
+function getCacheStatus(): { initialized: boolean; postcodes: number; sa2Regions: number; error: string | null } {
   return {
     initialized: cacheInitialized,
     postcodes: geographyCache.size,
+    sa2Regions: sa2Cache.size,
     error: cacheError
   };
 }
@@ -492,6 +588,61 @@ async function handleGetInvestorSentiment(region: string): Promise<any> {
 }
 
 /**
+ * Get location statistics by lat/long coordinates
+ * Finds nearest SA2 region and returns suburb stats
+ */
+async function handleGetLocationStats(lat: number, lon: number): Promise<any> {
+  validateLatitude(lat);
+  validateLongitude(lon);
+
+  // Check cache status
+  if (!cacheInitialized) {
+    return createErrorResponse(
+      `Geography cache not yet initialized. Cannot lookup location.\n` +
+      `Error: ${cacheError || 'Cache initialization in progress'}`
+    );
+  }
+
+  // Find nearest SA2 region
+  const nearest = findNearestSA2(lat, lon);
+  if (!nearest) {
+    return createErrorResponse(
+      `Unable to find nearest SA2 region for coordinates (${lat}, ${lon}).\n` +
+      `Geography cache may be empty.`
+    );
+  }
+
+  const { sa2, distance } = nearest;
+
+  // Fetch data for the SA2 region
+  const endpoint = `${ABS_API_BASE}ABS,ABS_ANNUAL_ERP_ASGS2021/all?startPeriod=2021&endPeriod=2021`;
+  const data = await fetchABSData(endpoint);
+
+  if (data.error) {
+    return createErrorResponse(
+      `Unable to retrieve location statistics for coordinates (${lat}, ${lon}).\n` +
+      `Nearest SA2: ${sa2.sa2Name} (${sa2.sa2Code}) - ${distance.toFixed(2)} km away\n` +
+      `Issue: ${data.error}\n` +
+      `Note: SDMX dimension filtering by SA2 code requires API configuration.`
+    );
+  }
+
+  const population = extractValue(data);
+  return createSuccessResponse({
+    query_latitude: lat,
+    query_longitude: lon,
+    nearest_sa2_code: sa2.sa2Code,
+    nearest_sa2_name: sa2.sa2Name,
+    postcode: sa2.postcode,
+    state: sa2.state,
+    distance_km: Math.round(distance * 100) / 100,
+    total_population: population,
+    median_weekly_household_income: null,
+    note: `Found nearest SA2 region "${sa2.sa2Name}" (${sa2.sa2Code}) at ${distance.toFixed(2)} km from query location. SA2 regions are smaller and more precise than postcodes. Income data requires Census G02 INCP dataset.`
+  });
+}
+
+/**
  * Get gentrification score: compare investment vs income growth
  */
 async function handleGetGentrificationScore(postcode: string): Promise<any> {
@@ -578,6 +729,28 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
+      {
+        name: 'get_location_stats',
+        description: 'Get suburb statistics for a location specified by latitude and longitude coordinates. Finds the nearest SA2 region (Statistical Area Level 2 - smaller and more precise than postcodes) and returns population and income data.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            latitude: {
+              type: 'number',
+              description: 'Latitude coordinate (-90 to 90)',
+              minimum: -90,
+              maximum: 90,
+            },
+            longitude: {
+              type: 'number',
+              description: 'Longitude coordinate (-180 to 180)',
+              minimum: -180,
+              maximum: 180,
+            },
+          },
+          required: ['latitude', 'longitude'],
+        },
+      },
       {
         name: 'get_suburb_stats',
         description: 'Get median weekly household income and total population for a given Australian postcode.',
@@ -674,27 +847,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     switch (name) {
+      case 'get_location_stats':
+        return await handleGetLocationStats(
+          (args as { latitude: number; longitude: number }).latitude,
+          (args as { latitude: number; longitude: number }).longitude
+        );
+
       case 'get_suburb_stats':
         return await handleGetSuburbStats((args as { postcode: string }).postcode);
-      
+
       case 'get_mortgage_stress':
         return await handleGetMortgageStress((args as { region: string }).region);
-      
+
       case 'get_supply_pipeline':
         return await handleGetSupplyPipeline((args as { postcode: string }).postcode);
-      
+
       case 'get_wealth_migration':
         return await handleGetWealthMigration((args as { region: string }).region);
-      
+
       case 'get_investor_sentiment':
         return await handleGetInvestorSentiment((args as { region: string }).region);
-      
+
       case 'get_gentrification_score':
         return await handleGetGentrificationScore((args as { postcode: string }).postcode);
-      
+
       default:
         return createErrorResponse(
-          `Unknown tool: "${name}". Available tools are: get_suburb_stats, get_mortgage_stress, ` +
+          `Unknown tool: "${name}". Available tools are: get_location_stats, get_suburb_stats, get_mortgage_stress, ` +
           `get_supply_pipeline, get_wealth_migration, get_investor_sentiment, get_gentrification_score.`
         );
     }
@@ -719,7 +898,7 @@ await server.connect(transport);
 
 const cacheStatus = getCacheStatus();
 if (cacheStatus.initialized) {
-  console.error(`[Server] Ready with geography cache (${cacheStatus.postcodes} postcodes)`);
+  console.error(`[Server] Ready with geography cache (${cacheStatus.sa2Regions} SA2 regions, ${cacheStatus.postcodes} postcodes)`);
 } else {
   console.error('[Server] Running with limited functionality - geography cache failed to initialize');
   console.error(`[Server] Cache error: ${cacheStatus.error}`);
